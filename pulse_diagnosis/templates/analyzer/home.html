@@ -1,0 +1,110 @@
+{% extends 'analyzer/base.html' %}
+
+{% block title %}Nazria Mufrad Aza - Unani Pulse Diagnosis{% endblock %}
+
+{% block content %}
+<div class="hero-section">
+    <h1>
+        <span class="urdu-title">نظریہ مفرد اعضاء</span>
+        <span class="english-subtitle">Unani Pulse Diagnosis System</span>
+    </h1>
+    <p class="hero-description">
+        Traditional pulse diagnosis based on the principles of Mizaj (temperament) and Tehreek (bodily movements)
+        as described by Hakim Dost Muhammad Sabir Multani.
+    </p>
+    <a href="{% url 'upload' %}" class="btn btn-primary btn-large">
+        Start Diagnosis
+    </a>
+</div>
+
+<section class="info-section">
+    <h2>How It Works</h2>
+    <div class="steps-grid">
+        <div class="step-card">
+            <div class="step-number">1</div>
+            <h3>Record Pulse Video</h3>
+            <p>Place your fingertip on your phone camera and record a 30-60 second video of your pulse.</p>
+        </div>
+        <div class="step-card">
+            <div class="step-number">2</div>
+            <h3>Enter Symptoms</h3>
+            <p>Select or describe your current symptoms to help with accurate diagnosis.</p>
+        </div>
+        <div class="step-card">
+            <div class="step-number">3</div>
+            <h3>Get Diagnosis</h3>
+            <p>Receive a traditional Unani diagnosis with dietary recommendations.</p>
+        </div>
+    </div>
+</section>
+
+<section class="mizaj-section">
+    <h2>The Six Mizaj Combinations</h2>
+    <p class="section-intro">According to Unani medicine, health depends on the balance of temperaments:</p>
+
+    <div class="mizaj-grid">
+        <div class="mizaj-card hot-dry">
+            <h3>Garm Khushk</h3>
+            <p class="urdu-text">گرم خشک</p>
+            <p>Hot & Dry - Choleric</p>
+        </div>
+        <div class="mizaj-card hot-moist">
+            <h3>Garm Ratab</h3>
+            <p class="urdu-text">گرم رطب</p>
+            <p>Hot & Moist - Sanguine</p>
+        </div>
+        <div class="mizaj-card cold-dry">
+            <h3>Sard Khushk</h3>
+            <p class="urdu-text">سرد خشک</p>
+            <p>Cold & Dry - Melancholic</p>
+        </div>
+        <div class="mizaj-card cold-moist">
+            <h3>Sard Ratab</h3>
+            <p class="urdu-text">سرد رطب</p>
+            <p>Cold & Moist - Phlegmatic</p>
+        </div>
+        <div class="mizaj-card moderate-hot">
+            <h3>Mutadil Garm</h3>
+            <p class="urdu-text">معتدل گرم</p>
+            <p>Moderately Hot</p>
+        </div>
+        <div class="mizaj-card moderate-cold">
+            <h3>Mutadil Sard</h3>
+            <p class="urdu-text">معتدل سرد</p>
+            <p>Moderately Cold</p>
+        </div>
+    </div>
+</section>
+
+<section class="tehreek-section">
+    <h2>The Six Tahareeks</h2>
+    <p class="section-intro">Bodily movements and circulations that indicate system imbalances:</p>
+
+    <div class="tehreek-list">
+        <div class="tehreek-item">
+            <span class="urdu-text">اعصابی غدی</span>
+            <span>Nervous-Glandular</span>
+        </div>
+        <div class="tehreek-item">
+            <span class="urdu-text">اعصابی عضلاتی</span>
+            <span>Nervous-Muscular</span>
+        </div>
+        <div class="tehreek-item">
+            <span class="urdu-text">عضلاتی اعصابی</span>
+            <span>Muscular-Nervous</span>
+        </div>
+        <div class="tehreek-item">
+            <span class="urdu-text">عضلاتی غدی</span>
+            <span>Muscular-Glandular</span>
+        </div>
+        <div class="tehreek-item">
+            <span class="urdu-text">غدی عضلاتی</span>
+            <span>Glandular-Muscular</span>
+        </div>
+        <div class="tehreek-item">
+            <span class="urdu-text">غدی اعصابی</span>
+            <span>Glandular-Nervous</span>
+        </div>
+    </div>
+</section>
+{% endblock %}

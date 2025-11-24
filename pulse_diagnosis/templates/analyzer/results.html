@@ -1,0 +1,192 @@
+{% extends 'analyzer/base.html' %}
+
+{% block title %}Analysis Results - Nazria Mufrad Aza{% endblock %}
+
+{% block content %}
+<div class="results-page">
+    <h1>Pulse Analysis Results</h1>
+
+    {% if analysis.status == 'completed' %}
+
+    <!-- Patient Info -->
+    {% if analysis.patient_name %}
+    <div class="patient-info-card">
+        <h3>Patient Information</h3>
+        <p><strong>Name:</strong> {{ analysis.patient_name }}</p>
+        {% if analysis.patient_age %}<p><strong>Age:</strong> {{ analysis.patient_age }} years</p>{% endif %}
+        {% if analysis.patient_gender %}<p><strong>Gender:</strong> {{ analysis.patient_gender|title }}</p>{% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Pulse Data Summary -->
+    <section class="results-section">
+        <h2>Pulse Measurements</h2>
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value">{{ pulse_data.average_heart_rate_bpm }}</div>
+                <div class="metric-label">Heart Rate (BPM)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ pulse_data.heart_rate_variability_ms }}</div>
+                <div class="metric-label">HRV (ms)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ pulse_data.signal_quality|title }}</div>
+                <div class="metric-label">Signal Quality</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{{ pulse_data.total_beats_detected }}</div>
+                <div class="metric-label">Beats Detected</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pulse Characteristics -->
+    <section class="results-section">
+        <h2>Pulse Characteristics</h2>
+        <div class="characteristics-grid">
+            <div class="char-item">
+                <span class="char-label">Rhythm:</span>
+                <span class="char-value">{{ pulse_data.pulse_characteristics.rhythm|title }}</span>
+            </div>
+            <div class="char-item">
+                <span class="char-label">Strength:</span>
+                <span class="char-value">{{ pulse_data.pulse_characteristics.strength|title }}</span>
+            </div>
+            <div class="char-item">
+                <span class="char-label">Volume:</span>
+                <span class="char-value">{{ pulse_data.pulse_characteristics.volume|title }}</span>
+            </div>
+            <div class="char-item">
+                <span class="char-label">Tension:</span>
+                <span class="char-value">{{ pulse_data.pulse_characteristics.tension|title }}</span>
+            </div>
+            <div class="char-item">
+                <span class="char-label">Rate Pattern:</span>
+                <span class="char-value">{{ pulse_data.pulse_characteristics.rate_pattern|title }}</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Waveform Analysis -->
+    <section class="results-section">
+        <h2>Waveform Analysis</h2>
+        <div class="waveform-grid">
+            <div class="waveform-item">
+                <span class="wf-label">Systolic Peak Amplitude:</span>
+                <span class="wf-value">{{ pulse_data.waveform_analysis.systolic_peak_amplitude }}</span>
+            </div>
+            <div class="waveform-item">
+                <span class="wf-label">Diastolic Notch Depth:</span>
+                <span class="wf-value">{{ pulse_data.waveform_analysis.diastolic_notch_depth }}</span>
+            </div>
+            <div class="waveform-item">
+                <span class="wf-label">Pulse Wave Velocity:</span>
+                <span class="wf-value">{{ pulse_data.waveform_analysis.pulse_wave_velocity|title }}</span>
+            </div>
+            <div class="waveform-item">
+                <span class="wf-label">Rise Time:</span>
+                <span class="wf-value">{{ pulse_data.waveform_analysis.rise_time_ms }} ms</span>
+            </div>
+            <div class="waveform-item">
+                <span class="wf-label">Fall Time:</span>
+                <span class="wf-value">{{ pulse_data.waveform_analysis.fall_time_ms }} ms</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Reported Symptoms -->
+    <section class="results-section">
+        <h2>Reported Symptoms</h2>
+        {% if symptoms %}
+        <ul class="symptoms-list">
+            {% for symptom in symptoms %}
+            <li>{{ symptom }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="no-data">No symptoms reported</p>
+        {% endif %}
+    </section>
+
+    <!-- Data for AI Diagnosis -->
+    <section class="results-section data-section">
+        <h2>Data for Diagnosis Prompt</h2>
+        <p class="section-description">Copy this formatted data for use with the AI diagnosis system:</p>
+
+        <div class="data-block">
+            <h3>Pulse Data</h3>
+            <div class="code-container">
+                <button class="copy-btn" onclick="copyToClipboard('pulseDataCode')">Copy</button>
+                <pre id="pulseDataCode"><code>{{ pulse_data_json }}</code></pre>
+            </div>
+        </div>
+
+        <div class="data-block">
+            <h3>User Symptoms</h3>
+            <div class="code-container">
+                <button class="copy-btn" onclick="copyToClipboard('symptomsCode')">Copy</button>
+                <pre id="symptomsCode"><code>{{ symptoms_formatted }}</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Analysis Metadata -->
+    <section class="results-section metadata-section">
+        <h2>Analysis Information</h2>
+        <div class="metadata-grid">
+            <div class="meta-item">
+                <span class="meta-label">Analysis ID:</span>
+                <span class="meta-value">{{ analysis.id }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Created:</span>
+                <span class="meta-value">{{ analysis.created_at|date:"F d, Y H:i" }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Recording Duration:</span>
+                <span class="meta-value">{{ pulse_data.recording_duration_seconds }} seconds</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Actions -->
+    <div class="results-actions">
+        <a href="{% url 'upload' %}" class="btn btn-primary">New Analysis</a>
+        <a href="{% url 'history' %}" class="btn btn-secondary">View History</a>
+    </div>
+
+    {% elif analysis.status == 'failed' %}
+    <div class="error-card">
+        <h2>Analysis Failed</h2>
+        <p>{{ analysis.error_message }}</p>
+        <a href="{% url 'upload' %}" class="btn btn-primary">Try Again</a>
+    </div>
+    {% else %}
+    <div class="processing-card">
+        <h2>Analysis in Progress</h2>
+        <p>Please wait while we analyze your pulse data...</p>
+        <div class="spinner"></div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function copyToClipboard(elementId) {
+    const element = document.getElementById(elementId);
+    const text = element.textContent;
+
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = element.parentElement.querySelector('.copy-btn');
+        btn.textContent = 'Copied!';
+        setTimeout(() => {
+            btn.textContent = 'Copy';
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+    });
+}
+</script>
+{% endblock %}
