@@ -18,7 +18,97 @@
     </div>
     {% endif %}
 
-    <!-- Pulse Data Summary -->
+    <!-- Method Badge -->
+    {% if pulse_data.method == 'wrist_nabz' %}
+    <div class="method-badge">
+        <span class="badge-icon">✋</span>
+        <span>Traditional Nabz Method</span>
+        <span class="urdu-text">روایتی نبض کا معائنہ</span>
+    </div>
+    {% else %}
+    <div class="method-badge">
+        <span class="badge-icon">👆</span>
+        <span>Finger-on-Lens Method</span>
+    </div>
+    {% endif %}
+
+    <!-- Wrist Nabz Results -->
+    {% if pulse_data.method == 'wrist_nabz' %}
+    <section class="results-section nabz-results">
+        <h2>Multi-Point Nabz Analysis</h2>
+        <h3 class="urdu-text">چار انگلیوں کی نبض کا تجزیہ</h3>
+
+        <div class="nabz-positions-results">
+            {% for finger, data in pulse_data.finger_positions.items %}
+            <div class="nabz-position-card">
+                <h3>{{ finger|title }} Finger</h3>
+                {% if finger == 'index' %}
+                    <p class="urdu-text">انگشت شہادت</p>
+                    <p class="organ-text">Heart & Small Intestine</p>
+                {% elif finger == 'middle' %}
+                    <p class="urdu-text">درمیانی انگلی</p>
+                    <p class="organ-text">Liver & Gall Bladder</p>
+                {% elif finger == 'ring' %}
+                    <p class="urdu-text">انگوٹھی والی انگلی</p>
+                    <p class="organ-text">Kidney & Urinary Bladder</p>
+                {% elif finger == 'little' %}
+                    <p class="urdu-text">چھنگلی</p>
+                    <p class="organ-text">Lung & Large Intestine</p>
+                {% endif %}
+
+                {% if data.status == 'success' %}
+                <div class="nabz-metrics">
+                    <div class="metric-row">
+                        <span>Heart Rate:</span>
+                        <strong>{{ data.heart_rate_bpm }} BPM</strong>
+                    </div>
+                    <div class="metric-row">
+                        <span>HRV:</span>
+                        <strong>{{ data.hrv_ms }} ms</strong>
+                    </div>
+                    <div class="metric-row">
+                        <span>Strength:</span>
+                        <strong>{{ data.characteristics.strength }}</strong>
+                    </div>
+                    <div class="metric-row">
+                        <span>Rate:</span>
+                        <strong>{{ data.characteristics.rate }}</strong>
+                    </div>
+                    <div class="metric-row">
+                        <span>Regularity:</span>
+                        <strong>{{ data.characteristics.regularity }}</strong>
+                    </div>
+                    <div class="metric-row">
+                        <span>Volume:</span>
+                        <strong>{{ data.characteristics.volume }}</strong>
+                    </div>
+                </div>
+                <div class="quality-badge quality-{{ data.quality }}">
+                    Quality: {{ data.quality|title }}
+                </div>
+                {% else %}
+                <p class="no-data">{{ data.message }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if pulse_data.unani_interpretation %}
+        <div class="unani-interpretation">
+            <h3>Traditional Unani Interpretation</h3>
+            <p class="urdu-text">{{ pulse_data.unani_interpretation.method }}</p>
+            {% if pulse_data.unani_interpretation.notes %}
+            <ul>
+                {% for note in pulse_data.unani_interpretation.notes %}
+                <li>{{ note }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endif %}
+    </section>
+    {% else %}
+    <!-- Standard Pulse Data Summary -->
     <section class="results-section">
         <h2>Pulse Measurements</h2>
         <div class="metrics-grid">
@@ -94,6 +184,7 @@
             </div>
         </div>
     </section>
+    {% endif %}
 
     <!-- Reported Symptoms -->
     <section class="results-section">

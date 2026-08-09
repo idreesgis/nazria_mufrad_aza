@@ -1,6 +1,7 @@
 """
 PPG Analysis Service for Django Integration
 Integrates the PPG pulse analyzer with Django views.
+Supports both finger-on-lens method and traditional wrist Nabz method.
 """
 import cv2
 import numpy as np
@@ -15,11 +16,21 @@ class PPGAnalysisService:
     Service class for analyzing PPG signals from uploaded videos.
     """
 
-    def __init__(self, fps=30, duration=60):
+    def __init__(self, fps=30, duration=60, method='finger'):
+        """
+        Initialize the PPG analyzer.
+
+        Args:
+            fps: Frames per second
+            duration: Recording duration
+            method: 'finger' for finger-on-lens, 'wrist' for traditional Nabz
+        """
         self.fps = fps
         self.duration = duration
+        self.method = method
         self.raw_signal = []
         self.filtered_signal = []
+        self.finger_signals = {}  # For wrist method
 
     def analyze_video(self, video_path):
         """
@@ -31,14 +42,14 @@ class PPGAnalysisService:
         Returns:
             Dictionary containing pulse analysis results
         """
-        # Extract PPG signal from video
-        self._extract_ppg_from_video(video_path)
-
-        # Filter the signal
-        self._filter_signal()
-
-        # Analyze and return results
-        return self._analyze_pulse()
+        if self.method == 'wrist':
+            # Traditional Nabz method - multi-point analysis
+            return self._analyze_wrist_nabz(video_path)
+        else:
+            # Finger-on-lens method - single point
+            self._extract_ppg_from_video(video_path)
+            self._filter_signal()
+            return self._analyze_pulse()
 
     def _extract_ppg_from_video(self, video_path):
         """Extract PPG signal from video file."""
@@ -311,15 +322,173 @@ class PPGAnalysisService:
             return "poor"
 
 
-def analyze_pulse_video(video_path):
+    def _analyze_wrist_nabz(self, video_path):
+        """Analyze traditional wrist Nabz with multi-finger positions."""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {video_path}")
+
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.duration = total_frames / self.fps
+
+        # Initialize signal storage for four finger positions
+        signals = {
+            'index': [],
+            'middle': [],
+            'ring': [],
+            'little': []
+        }
+
+        rois = None
+        frame_count = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if rois is None:
+                rois = self._detect_wrist_finger_positions(frame)
+
+            # Extract signal from each position
+            for finger_name, roi in rois.items():
+                if roi and len(roi) == 4:
+                    x, y, w, h = [int(v) for v in roi]
+                    if x >= 0 and y >= 0 and x + w <= frame.shape[1] and y + h <= frame.shape[0]:
+                        region = frame[y:y+h, x:x+w]
+                        if region.size > 0:
+                            signals[finger_name].append(np.mean(region[:, :, 1]))
+
+            frame_count += 1
+
+        cap.release()
+
+        # Convert to numpy and filter
+        for finger in signals:
+            if len(signals[finger]) > 100:
+                raw = np.array(signals[finger])
+                normalized = (raw - np.mean(raw)) / (np.std(raw) + 1e-6)
+                nyquist = self.fps / 2
+                b, a = butter(2, [0.5/nyquist, 4.0/nyquist], btype='band')
+                self.finger_signals[finger] = filtfilt(b, a, normalized)
+
+        # Analyze each position
+        results = {
+            "recording_duration_seconds": round(self.duration, 1),
+            "recording_timestamp": datetime.now().isoformat() + "Z",
+            "method": "wrist_nabz",
+            "finger_positions": {},
+            "unani_interpretation": self._get_nabz_interpretation()
+        }
+
+        for finger, signal in self.finger_signals.items():
+            if len(signal) > 100:
+                results["finger_positions"][finger] = self._analyze_nabz_position(signal, finger)
+
+        return results
+
+    def _detect_wrist_finger_positions(self, frame):
+        """Detect four finger positions on wrist."""
+        height, width = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # Skin detection
+        mask = cv2.inRange(hsv, np.array([0, 20, 70]), np.array([20, 255, 255]))
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.dilate(cv2.erode(mask, kernel, iterations=2), kernel, iterations=3)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest)
+            fw = w // 4
+            rh = min(h // 3, 60)
+            ry = y + (h - rh) // 2
+
+            return {
+                'index': (x, ry, fw, rh),
+                'middle': (x + fw, ry, fw, rh),
+                'ring': (x + 2*fw, ry, fw, rh),
+                'little': (x + 3*fw, ry, fw, rh)
+            }
+
+        # Fallback
+        sw = width // 4
+        rh = height // 4
+        return {
+            'index': (0, height//3, sw, rh),
+            'middle': (sw, height//3, sw, rh),
+            'ring': (2*sw, height//3, sw, rh),
+            'little': (3*sw, height//3, sw, rh)
+        }
+
+    def _analyze_nabz_position(self, signal, position):
+        """Analyze single Nabz position."""
+        peaks, _ = find_peaks(signal, distance=int(self.fps * 0.5), prominence=0.1)
+
+        if len(peaks) < 3:
+            return {"status": "insufficient_data"}
+
+        ibi = np.diff(peaks) / self.fps * 1000
+        hr = 60000 / np.mean(ibi)
+        hrv = np.std(ibi)
+
+        amplitudes = []
+        for i in range(1, len(peaks)-1):
+            seg = signal[(peaks[i-1]+peaks[i])//2:(peaks[i]+peaks[i+1])//2]
+            if len(seg) > 0:
+                amplitudes.append(np.max(seg) - np.min(seg))
+
+        amp = np.mean(amplitudes) if amplitudes else 0.5
+
+        # Unani characteristics
+        strength = "strong (قوی)" if amp > 0.7 else "moderate (معتدل)" if amp > 0.4 else "weak (ضعیف)"
+        rate = "fast (سریع)" if hr > 85 else "normal (معتدل)" if hr > 65 else "slow (بطی)"
+        regularity = "regular (منتظم)" if hrv < 60 else "irregular (غیر منتظم)"
+
+        return {
+            "status": "success",
+            "heart_rate_bpm": round(hr, 1),
+            "hrv_ms": round(hrv, 1),
+            "amplitude": round(amp, 3),
+            "characteristics": {
+                "strength": strength,
+                "rate": rate,
+                "regularity": regularity,
+                "volume": "full (ممتلی)" if amp > 0.65 else "moderate (معتدل)" if amp > 0.35 else "empty (خالی)"
+            }
+        }
+
+    def _get_nabz_interpretation(self):
+        """Traditional Unani interpretation of Nabz positions."""
+        return {
+            "method": "Traditional Nabz Examination (نبض کا معائنہ)",
+            "positions": {
+                "index": "Tarjani (انگشت شہادت) - Heart & Small Intestine",
+                "middle": "Madhyama (درمیانی انگلی) - Liver & Gall Bladder",
+                "ring": "Anamika (انگوٹھی والی انگلی) - Kidney & Urinary Bladder",
+                "little": "Kanishtha (چھنگلی) - Lung & Large Intestine"
+            },
+            "notes": [
+                "Each position corresponds to specific organs",
+                "Strongest pulse indicates most active organ system",
+                "Compare variations between positions for diagnosis"
+            ]
+        }
+
+
+def analyze_pulse_video(video_path, method='finger'):
     """
     Convenience function to analyze a pulse video.
 
     Args:
         video_path: Path to the video file
+        method: 'finger' for finger-on-lens, 'wrist' for traditional Nabz
 
     Returns:
         Dictionary of pulse analysis results
     """
-    service = PPGAnalysisService()
+    service = PPGAnalysisService(method=method)
     return service.analyze_video(video_path)

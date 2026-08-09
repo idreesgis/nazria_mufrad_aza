@@ -82,6 +82,9 @@ class UploadView(View):
             messages.error(request, 'Please upload a pulse video.')
             return redirect('upload')
 
+        # Get capture method
+        capture_method = request.POST.get('capture_method', 'finger')
+
         # Get symptoms
         symptoms = request.POST.getlist('symptoms')
         custom_symptoms = request.POST.get('custom_symptoms', '').strip()
@@ -109,7 +112,9 @@ class UploadView(View):
         # Process the video
         try:
             video_path = analysis.video_file.path
-            pulse_data = analyze_pulse_video(video_path)
+
+            # Use appropriate method based on capture type
+            pulse_data = analyze_pulse_video(video_path, method=capture_method)
 
             analysis.pulse_data = pulse_data
             analysis.status = 'completed'

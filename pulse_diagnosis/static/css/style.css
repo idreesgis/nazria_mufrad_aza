@@ -314,6 +314,102 @@ h3 { font-size: 1.4rem; }
     margin-bottom: 2rem;
 }
 
+/* Method Selection */
+.method-selection {
+    margin-bottom: 3rem;
+}
+
+.method-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.method-card {
+    background: var(--card-background);
+    border: 3px solid var(--border-color);
+    border-radius: 12px;
+    padding: 2rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: block;
+}
+
+.method-card:hover {
+    border-color: var(--primary-light);
+    box-shadow: 0 4px 15px rgba(45, 80, 22, 0.1);
+}
+
+.method-card input[type="radio"] {
+    display: none;
+}
+
+.method-card input[type="radio"]:checked + .method-content {
+    border-left: 4px solid var(--primary-color);
+    padding-left: 1rem;
+}
+
+.method-card input[type="radio"]:checked ~ .method-content h3 {
+    color: var(--primary-color);
+}
+
+.method-content h3 {
+    margin-bottom: 0.5rem;
+    transition: color 0.3s;
+}
+
+.method-content p {
+    margin: 0.5rem 0;
+    color: var(--text-muted);
+}
+
+.method-note {
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+/* Nabz Positions */
+.nabz-positions {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: #f8f5f0;
+    border-radius: 8px;
+}
+
+.position-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.position-item {
+    text-align: center;
+    padding: 1rem;
+    background: white;
+    border-radius: 8px;
+    border: 2px solid var(--border-color);
+}
+
+.position-item strong {
+    display: block;
+    color: var(--primary-color);
+    margin-bottom: 0.3rem;
+}
+
+.position-item .urdu-text {
+    font-size: 1rem;
+    display: block;
+    margin: 0.3rem 0;
+}
+
+.position-item p {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.5rem;
+}
+
 /* Instructions */
 .instructions-section {
     margin-bottom: 3rem;
@@ -603,6 +699,144 @@ h3 { font-size: 1.4rem; }
 /* ===== Results Page ===== */
 .results-page h1 {
     margin-bottom: 2rem;
+}
+
+/* Method Badge */
+.method-badge {
+    background: var(--primary-color);
+    color: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    margin-bottom: 2rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-direction: column;
+}
+
+.method-badge .badge-icon {
+    font-size: 1.5rem;
+}
+
+.method-badge .urdu-text {
+    font-size: 0.9rem;
+    opacity: 0.95;
+}
+
+/* Nabz Results */
+.nabz-results h3.urdu-text {
+    text-align: center;
+    color: var(--text-muted);
+    margin-top: 0.5rem;
+}
+
+.nabz-positions-results {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin: 2rem 0;
+}
+
+.nabz-position-card {
+    background: #f8f8f8;
+    border-radius: 12px;
+    padding: 1.5rem;
+    border: 2px solid var(--border-color);
+}
+
+.nabz-position-card h3 {
+    color: var(--primary-color);
+    margin-bottom: 0.3rem;
+}
+
+.nabz-position-card .urdu-text {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin: 0.3rem 0;
+}
+
+.nabz-position-card .organ-text {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-bottom: 1rem;
+}
+
+.nabz-metrics {
+    margin-top: 1rem;
+}
+
+.metric-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.metric-row span {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.metric-row strong {
+    color: var(--text-color);
+}
+
+.quality-badge {
+    margin-top: 1rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.quality-excellent {
+    background: #d4edda;
+    color: #155724;
+}
+
+.quality-good {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+
+.quality-moderate {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.quality-poor {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.unani-interpretation {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: #f0f8e8;
+    border-left: 4px solid var(--primary-color);
+    border-radius: 0 8px 8px 0;
+}
+
+.unani-interpretation h3 {
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+
+.unani-interpretation .urdu-text {
+    font-size: 1.1rem;
+    margin: 0.5rem 0;
+}
+
+.unani-interpretation ul {
+    margin-top: 1rem;
+    margin-left: 1.5rem;
+}
+
+.unani-interpretation li {
+    margin: 0.5rem 0;
+    color: var(--text-muted);
 }
 
 .results-section {

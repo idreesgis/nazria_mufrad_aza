@@ -7,9 +7,33 @@
     <h1>Pulse Analysis</h1>
     <p class="page-intro">Upload your pulse video and enter your symptoms for traditional Unani diagnosis.</p>
 
+    <!-- Method Selection -->
+    <section class="method-selection">
+        <h2>Select Pulse Capture Method</h2>
+        <div class="method-options">
+            <label class="method-card" onclick="showMethodInstructions('finger')">
+                <input type="radio" name="capture_method" value="finger" checked>
+                <div class="method-content">
+                    <h3>Finger-on-Lens Method</h3>
+                    <p>Place fingertip directly on phone camera</p>
+                    <p class="method-note">Quick, simple, single-point measurement</p>
+                </div>
+            </label>
+            <label class="method-card" onclick="showMethodInstructions('wrist')">
+                <input type="radio" name="capture_method" value="wrist">
+                <div class="method-content">
+                    <h3>Traditional Nabz Method</h3>
+                    <p class="urdu-text">روایتی نبض کا معائنہ</p>
+                    <p>Four fingers on wrist (traditional Hakim method)</p>
+                    <p class="method-note">Detailed, multi-point organ analysis</p>
+                </div>
+            </label>
+        </div>
+    </section>
+
     <!-- Video Capture Instructions -->
-    <section class="instructions-section">
-        <h2>How to Record Your Pulse Video</h2>
+    <section class="instructions-section" id="fingerInstructions">
+        <h2>How to Record Your Pulse Video - Finger Method</h2>
         <div class="instructions-card">
             <div class="instruction-steps">
                 <div class="instruction-item">
@@ -57,6 +81,90 @@
                     <li>Wait 5 minutes after any physical activity</li>
                     <li>Ensure stable hand position throughout</li>
                     <li>Warm your hands if they're cold</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Wrist Nabz Instructions (Hidden by default) -->
+    <section class="instructions-section" id="wristInstructions" style="display: none;">
+        <h2>How to Record Wrist Pulse - Traditional Nabz Method</h2>
+        <h3 class="urdu-text">نبض کی ویڈیو بنانے کی رہنمائی</h3>
+        <div class="instructions-card">
+            <div class="instruction-steps">
+                <div class="instruction-item">
+                    <div class="instruction-icon">1</div>
+                    <div class="instruction-content">
+                        <h4>Setup Phone on Stand</h4>
+                        <p>Mount phone on tripod/stand pointing straight down at table. Position 20-30 cm above the surface.</p>
+                    </div>
+                </div>
+                <div class="instruction-item">
+                    <div class="instruction-icon">2</div>
+                    <div class="instruction-content">
+                        <h4>Position Your Wrist</h4>
+                        <p>Place LEFT wrist palm-up on dark cloth. Position in center of camera frame. Relax your hand completely.</p>
+                    </div>
+                </div>
+                <div class="instruction-item">
+                    <div class="instruction-icon">3</div>
+                    <div class="instruction-content">
+                        <h4>Lighting Setup</h4>
+                        <p>Use natural daylight from the side or desk lamp at 45° angle. No harsh shadows. Skin should appear natural color.</p>
+                    </div>
+                </div>
+                <div class="instruction-item">
+                    <div class="instruction-icon">4</div>
+                    <div class="instruction-content">
+                        <h4>Place Fingers on Radial Artery</h4>
+                        <p>Position 3-4 fingers (index, middle, ring, little) on thumb side of wrist, just below wrist crease. Keep fingers parallel and aligned.</p>
+                    </div>
+                </div>
+                <div class="instruction-item">
+                    <div class="instruction-icon">5</div>
+                    <div class="instruction-content">
+                        <h4>Record for 60 Seconds</h4>
+                        <p>Start recording, then place fingers. Apply medium, consistent pressure. Stay absolutely still. Don't talk or move.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="nabz-positions">
+                <h4>Traditional Nabz Finger Positions</h4>
+                <div class="position-grid">
+                    <div class="position-item">
+                        <strong>Index Finger</strong>
+                        <span class="urdu-text">انگشت شہادت</span>
+                        <p>Heart & Small Intestine</p>
+                    </div>
+                    <div class="position-item">
+                        <strong>Middle Finger</strong>
+                        <span class="urdu-text">درمیانی انگلی</span>
+                        <p>Liver & Gall Bladder</p>
+                    </div>
+                    <div class="position-item">
+                        <strong>Ring Finger</strong>
+                        <span class="urdu-text">انگوٹھی والی انگلی</span>
+                        <p>Kidney & Bladder</p>
+                    </div>
+                    <div class="position-item">
+                        <strong>Little Finger</strong>
+                        <span class="urdu-text">چھنگلی</span>
+                        <p>Lung & Large Intestine</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tips-box">
+                <h4>Critical Tips for Nabz Recording</h4>
+                <ul>
+                    <li><strong>Phone on stand/tripod is mandatory</strong> - hand-held won't work</li>
+                    <li>Rest arm on stable table - eliminate all movement</li>
+                    <li>Keep fingers parallel and aligned on artery</li>
+                    <li>Medium pressure throughout - not too hard, not too light</li>
+                    <li>Record full 60 seconds minimum (90 seconds ideal)</li>
+                    <li>Wait 5 minutes after exercise before recording</li>
+                    <li>Best time: Early morning before breakfast</li>
                 </ul>
             </div>
         </div>
@@ -159,6 +267,20 @@
 
 {% block extra_js %}
 <script>
+// Toggle between method instructions
+function showMethodInstructions(method) {
+    const fingerInstructions = document.getElementById('fingerInstructions');
+    const wristInstructions = document.getElementById('wristInstructions');
+
+    if (method === 'finger') {
+        fingerInstructions.style.display = 'block';
+        wristInstructions.style.display = 'none';
+    } else {
+        fingerInstructions.style.display = 'none';
+        wristInstructions.style.display = 'block';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('video_file');
