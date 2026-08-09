@@ -1,0 +1,12 @@
+# Django and REST Framework
+Django>=4.2
+djangorestframework>=3.14.0
+django-cors-headers>=4.0
+
+# PPG Analysis
+opencv-python>=4.5.0
+numpy>=1.20.0
+scipy>=1.7.0
+
+# Production server (optional)
+gunicorn>=21.0

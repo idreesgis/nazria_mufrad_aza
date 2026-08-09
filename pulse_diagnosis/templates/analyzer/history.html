@@ -1,0 +1,57 @@
+{% extends 'analyzer/base.html' %}
+
+{% block title %}Analysis History - Nazria Mufrad Aza{% endblock %}
+
+{% block content %}
+<div class="history-page">
+    <h1>Analysis History</h1>
+
+    {% if analyses %}
+    <div class="history-table-container">
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Patient</th>
+                    <th>Heart Rate</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for analysis in analyses %}
+                <tr>
+                    <td>{{ analysis.created_at|date:"M d, Y H:i" }}</td>
+                    <td>{{ analysis.patient_name|default:"Anonymous" }}</td>
+                    <td>
+                        {% if analysis.pulse_data.average_heart_rate_bpm %}
+                            {{ analysis.pulse_data.average_heart_rate_bpm }} BPM
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="status-badge status-{{ analysis.status }}">
+                            {{ analysis.status|title }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if analysis.status == 'completed' %}
+                        <a href="{% url 'results' analysis_id=analysis.id %}" class="btn btn-small">View Results</a>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No analyses yet.</p>
+        <a href="{% url 'upload' %}" class="btn btn-primary">Start Your First Analysis</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
