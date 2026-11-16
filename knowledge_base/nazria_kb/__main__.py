@@ -3,6 +3,7 @@
     python -m nazria_kb build  --csv urdu_book.csv --out output/
     python -m nazria_kb load   --csv urdu_book.csv [--dsn-env NAZRIA_DATABASE_URL]
     python -m nazria_kb verify [--dsn-env NAZRIA_DATABASE_URL]
+    python -m nazria_kb consult [--dsn-env NAZRIA_DATABASE_URL] [--answers '["none","قبض",...]'] [--save]
 
 The DSN is read from an environment variable (never pass passwords on the command line).
 """
@@ -34,6 +35,10 @@ def main(argv=None) -> int:
     l.add_argument("--out", help="also write exports to this directory")
     v = sub.add_parser("verify", help="run integrity checks against the database")
     v.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
+    c = sub.add_parser("consult", help="run a questionnaire consultation in the terminal (uses the DB)")
+    c.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
+    c.add_argument("--answers", help="JSON list of answers for a scripted, non-interactive run")
+    c.add_argument("--save", action="store_true", help="store the session in nazria.consultation_sessions")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -51,11 +56,48 @@ def main(argv=None) -> int:
             stats = load(conn, ds)
             print(json.dumps(stats["db_counts"], ensure_ascii=False, indent=2))
             return _report(verify(conn))
+    if args.cmd == "consult":
+        return _consult(args)
     if args.cmd == "verify":
         from .db import connect, verify
         with connect(_dsn(args)) as conn:
             return _report(verify(conn))
     return 1
+
+
+def _consult(args) -> int:
+    from .db import connect, load_questions, save_session
+    from .engine import EngineConfig, PostgresRetriever, Session, build_engine
+    scripted = list(json.loads(args.answers)) if args.answers else None
+    with connect(_dsn(args)) as conn:
+        cfg = EngineConfig.from_env()
+        engine = build_engine(cfg, PostgresRetriever(conn), load_questions(conn))
+        session = Session(provider=cfg.provider, model=cfg.model)
+        reply = engine.start(session)
+        while True:
+            print("\n" + reply.text)
+            if reply.options:
+                for i, (_, label) in enumerate(reply.options, 1):
+                    print(f"  {i}. {label}")
+            if reply.done:
+                break
+            if scripted is not None:
+                if not scripted:
+                    print("\n[scripted answers exhausted]")
+                    break
+                msg = str(scripted.pop(0))
+                print(f"> {msg}")
+            else:
+                try:
+                    msg = input("> ")
+                except EOFError:
+                    break
+            reply = engine.reply(session, msg)
+        if args.save:
+            save_session(conn, session)
+            print(f"\n[saved session {session.session_uid}]")
+        print("\n" + json.dumps(session.result, ensure_ascii=False))
+    return 0
 
 
 def _report(checks) -> int:

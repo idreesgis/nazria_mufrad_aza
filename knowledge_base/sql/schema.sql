@@ -258,14 +258,22 @@ CREATE TABLE IF NOT EXISTS conversation_reviews (
     reviewed_at       timestamptz
 );
 
+-- ------------------------------------------------------------------ v2 columns (added before views)
+-- Hazardous ingredients (arsenic, mercury, copper sulphate, kushta …) found in the text.
+ALTER TABLE remedies      ADD COLUMN IF NOT EXISTS hazard_flags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hazard_flags text[] NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS ix_remedies_hazards ON remedies USING gin (hazard_flags);
+
 -- ------------------------------------------------------------------ views
-CREATE OR REPLACE VIEW v_conversations AS
+-- Views are dropped and recreated so that new table columns never break CREATE OR REPLACE.
+DROP VIEW IF EXISTS v_training_messages, v_conversations, v_dataset_summary, v_remedies_patient_safe CASCADE;
+CREATE VIEW v_conversations AS
 SELECT c.*, coalesce(r.review_status, 'pending_review') AS review_status, r.reviewer, r.reviewed_at
 FROM conversations c
 LEFT JOIN conversation_reviews r USING (conversation_uid);
 
 -- OpenAI/HF-style chat records for fine-tuning (system + user/assistant turns).
-CREATE OR REPLACE VIEW v_training_messages AS
+CREATE VIEW v_training_messages AS
 SELECT c.conversation_id,
        c.conversation_uid,
        c.conv_type,
@@ -278,11 +286,12 @@ SELECT c.conversation_id,
                                                 'content', t.content) ORDER BY t.turn_index)
             FROM conversation_turns t WHERE t.conversation_id = c.conversation_id),
            'meta', jsonb_build_object('uid', c.conversation_uid, 'type', c.conv_type, 'title', c.title,
-                                      'book_id', c.book_id, 'pages', to_jsonb(c.pages), 'template', c.template_id)
+                                      'book_id', c.book_id, 'pages', to_jsonb(c.pages), 'template', c.template_id,
+                                      'hazard_flags', to_jsonb(c.hazard_flags))
        ) AS record
 FROM v_conversations c;
 
-CREATE OR REPLACE VIEW v_dataset_summary AS
+CREATE VIEW v_dataset_summary AS
 SELECT 'source_pages' AS item, count(*)::bigint AS n FROM source_pages
 UNION ALL SELECT 'treatises', count(*) FROM treatises
 UNION ALL SELECT 'topics', count(*) FROM topics
@@ -304,3 +313,68 @@ INSERT INTO tehreek (code, code_en, primary_system, secondary_system, primary_or
   ('غدی عضلاتی',    'glandular-muscular', 'غدی',    'عضلاتی', 'جگر و غدد',    'گرم خشک', 'hot-dry'),
   ('غدی اعصابی',    'glandular-nervous',  'غدی',    'اعصابی', 'جگر و غدد',    'گرم تر',  'hot-moist')
 ON CONFLICT (code) DO NOTHING;
+
+-- =====================================================================
+-- v2: questionnaire consultation, consultation log, hazard flags
+-- (additive and idempotent – safe on a v1 database)
+-- =====================================================================
+INSERT INTO schema_version (version, description)
+VALUES (2, 'questionnaire engine, consultation sessions, remedy/conversation hazard flags')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- Question bank. Seeded by the loader from nazria_kb/questionnaire.py; a Hakeem may tune
+-- weights/labels here (the loader only inserts missing rows, it never overwrites edits).
+CREATE TABLE IF NOT EXISTS questionnaire_questions (
+    question_id  text PRIMARY KEY,
+    ordinal      int  NOT NULL,
+    kind         text NOT NULL CHECK (kind IN ('single', 'multi', 'text')),
+    stage        text NOT NULL CHECK (stage IN ('triage', 'profile', 'signs')),
+    text_ur      text NOT NULL,
+    active       boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS questionnaire_options (
+    question_id    text NOT NULL REFERENCES questionnaire_questions(question_id) ON DELETE CASCADE,
+    option_key     text NOT NULL,
+    ordinal        int  NOT NULL,
+    label_ur       text NOT NULL,
+    weights        jsonb NOT NULL DEFAULT '{}'::jsonb,   -- {"عضلاتی": 2}
+    source_book_id smallint,                             -- no FK: must survive data reloads (TRUNCATE CASCADE)
+    source_pages   int[] NOT NULL DEFAULT '{}',
+    PRIMARY KEY (question_id, option_key)
+);
+
+-- Consultation log for every engine (questionnaire now, LLM providers later).
+-- Contains patient answers: apply your retention / privacy policy. No names are collected.
+CREATE TABLE IF NOT EXISTS consultation_sessions (
+    session_uid   uuid PRIMARY KEY,
+    engine        text NOT NULL,                     -- questionnaire | llm
+    provider      text,                              -- openai | deepseek | local | anthropic | gemini
+    model         text,
+    status        text NOT NULL CHECK (status IN ('in_progress', 'completed', 'emergency', 'abandoned')),
+    answers       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    result        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    started_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_consultation_sessions_status ON consultation_sessions (status, started_at);
+
+CREATE TABLE IF NOT EXISTS consultation_messages (
+    session_uid   uuid NOT NULL REFERENCES consultation_sessions(session_uid) ON DELETE CASCADE,
+    message_index int  NOT NULL,
+    role          text NOT NULL CHECK (role IN ('patient', 'hakeem')),
+    content       text NOT NULL,
+    question_id   text,
+    -- reserved for LLM engines: usage / latency / retrieved chunk ids per message
+    prompt_tokens     int,
+    completion_tokens int,
+    latency_ms        int,
+    source_chunk_ids  int[] NOT NULL DEFAULT '{}',
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (session_uid, message_index)
+);
+
+-- Patient-safe remedies: no hazardous ingredient detected (still requires a Hakeem's advice).
+CREATE VIEW v_remedies_patient_safe AS
+SELECT * FROM remedies WHERE cardinality(hazard_flags) = 0;
