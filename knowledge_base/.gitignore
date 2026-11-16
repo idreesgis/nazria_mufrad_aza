@@ -1,0 +1,7 @@
+output/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.csv
+*.sql.gz
+nazria_kb_dump.sql
