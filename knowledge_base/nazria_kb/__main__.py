@@ -53,7 +53,8 @@ def _main(argv=None) -> int:
     v.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
     c = sub.add_parser("consult", help="run a questionnaire consultation in the terminal (uses the DB)")
     c.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
-    c.add_argument("--answers", help="JSON list of answers for a scripted, non-interactive run")
+    c.add_argument("--answers", help="answers for a scripted run: a JSON list, or plain values separated by "
+                                     "commas or | (e.g. 10,قبض,3,2,3,1,1,1,1,1,1,2,2,4)")
     c.add_argument("--save", action="store_true", help="store the session in nazria.consultation_sessions")
     r = sub.add_parser("review", help="AI review (LLM-as-judge) of generated conversations / questionnaire weights")
     r.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
@@ -172,7 +173,10 @@ def _export_training(args) -> int:
 def _consult(args) -> int:
     from .db import connect, load_questions, save_session
     from .engine import EngineConfig, PostgresRetriever, Session, build_engine
-    scripted = list(json.loads(args.answers)) if args.answers else None
+    try:
+        scripted = parse_answers(args.answers) if args.answers else None
+    except ValueError as e:
+        sys.exit(f"--answers: {e}")
     with connect(_dsn(args)) as conn:
         cfg = EngineConfig.from_env()
         engine = build_engine(cfg, PostgresRetriever(conn), load_questions(conn))
@@ -204,6 +208,25 @@ def _consult(args) -> int:
             print(f"\n[saved session {session.session_uid}]")
         print("\n" + json.dumps(session.result, ensure_ascii=False))
     return 0
+
+
+def parse_answers(text: str) -> list[str]:
+    """--answers as a JSON list, or plain values separated by '|' or ',' (with or without [ ]).
+    IDEs on Windows often strip the double quotes from parameters, which breaks JSON."""
+    text = text.strip()
+    try:
+        value = json.loads(text)
+        items = [str(v) for v in value] if isinstance(value, list) else None
+    except json.JSONDecodeError:
+        items = None
+    if items is None:
+        inner = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+        sep = "|" if "|" in inner else ","
+        items = [x.strip().strip("\"'") for x in inner.split(sep)]
+    items = [x for x in items if x]
+    if not items:
+        raise ValueError("no answers found; use e.g. 10,قبض,3,2,3,1,1,1,1,1,1,2,2,4")
+    return items
 
 
 def _report(checks) -> int:
