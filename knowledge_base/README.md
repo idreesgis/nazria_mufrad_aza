@@ -47,6 +47,9 @@ python -m nazria_kb load --csv /path/to/urdu_book.csv
 # 3. Re-run integrity checks any time
 python -m nazria_kb verify
 
+# 4. Try a questionnaire consultation in the terminal (add --save to log it)
+python -m nazria_kb consult
+
 # tests
 python -m pytest -q tests
 ```
@@ -60,6 +63,27 @@ Alternative without Python on the target: restore the dump
 - *Review-safe*: expert decisions live in `nazria.conversation_reviews`, keyed by a deterministic `conversation_uid`, and are never truncated.
 - *Deterministic*: same CSV → same dataset (seeded templates).
 - *Least privilege*: the loader only needs `CREATE` on the database (for schema `nazria`) — use a dedicated DB user.
+
+## Questionnaire consultation (works without any AI provider)
+
+`nazria_kb/engine.py` → `QuestionnaireEngine`, the current default (`NAZRIA_ENGINE=questionnaire`):
+
+1. **Red-flag triage.** Emergency symptoms stop the consultation and refer the patient to a hospital.
+2. **Complaint and profile.** Duration, age group, pregnancy.
+3. **Nine sign questions.** Urine colour, bowel habit, body state, gas, taste, heart, burning urine, catarrh, phlegm.
+   Each option is weighted toward اعصابی / عضلاتی / غدی and **cites the book page** (vol. 2 pp. 125–134).
+4. **Result.** The dominant system or tehreek with its evidence, then the matching book section (e.g. «عضلاتی قبض», p. 127),
+   its recipe and dose **only if safe**, diet advice, and a referral to a Hakeem.
+
+Safety (`nazria_kb/safety.py`):
+- Recipes containing arsenic, mercury, copper sulphate, kushta, aconite, nux vomica, opium, lead and similar are never shown.
+  58 remedies are flagged in `remedies.hazard_flags`, and 160 generated conversations in `conversations.hazard_flags`.
+- Children, pregnant or breast-feeding women and the elderly never receive recipes.
+- The question bank lives in `questionnaire_questions` / `questionnaire_options`. A Hakeem can tune labels and weights there;
+  reloads never overwrite those edits. Sessions are logged in `consultation_sessions` / `consultation_messages`.
+
+AI providers (OpenAI, DeepSeek, Claude, Gemini, local model) plug into the same engine interface:
+see **[docs/AI_PROVIDER_ARCHITECTURE.md](docs/AI_PROVIDER_ARCHITECTURE.md)** for the plan and roadmap.
 
 ## Using it from the app
 

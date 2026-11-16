@@ -17,6 +17,8 @@ from psycopg.types.json import Jsonb
 from . import PIPELINE_VERSION
 from .normalize import search_key
 from .pipeline import AUTHOR, BOOKS, PUBLISHER, Dataset
+from .questionnaire import DEFAULT_QUESTIONS, SOURCE_BOOK, Option, Question
+from .safety import hazard_flags
 
 log = logging.getLogger("nazria_kb")
 SCHEMA_SQL = Path(__file__).resolve().parent.parent / "sql" / "schema.sql"
@@ -122,13 +124,14 @@ def load(conn: psycopg.Connection, ds: Dataset) -> dict:
             tid = topic_id[r.topic_index]
             rem_rows.append((tid, disease_by_topic.get(tid) if r.indication else None, r.name, search_key(r.name),
                              r.dosage_form, r.composition_text, r.preparation_text, r.dosage_text, r.actions_text,
-                             r.caution_text, r.indication, r.tehreek, r.pages or ds.topics[r.topic_index].pages))
+                             r.caution_text, r.indication, r.tehreek, r.pages or ds.topics[r.topic_index].pages,
+                             hazard_flags(" ".join(x for x in (r.composition_text, r.preparation_text) if x))))
         ids = []
         for row in rem_rows:  # small table: row inserts keep a reliable position -> id mapping
             ids.append(cur.execute(
                 "INSERT INTO nazria.remedies (topic_id, disease_id, name, name_key, dosage_form, composition_text, "
-                "preparation_text, dosage_text, actions_text, caution_text, indication, tehreek_code, pages) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING remedy_id", row).fetchone()[0])
+                "preparation_text, dosage_text, actions_text, caution_text, indication, tehreek_code, pages, hazard_flags) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING remedy_id", row).fetchone()[0])
         _copy(cur, "remedy_ingredients", ["remedy_id", "ordinal", "ingredient_name", "quantity_text", "quantity_value", "unit"],
               [(rid, i.ordinal, i.name, i.quantity_text, i.quantity_value, i.unit)
                for rid, r in zip(ids, ds.remedies) for i in r.ingredients])
@@ -138,9 +141,11 @@ def load(conn: psycopg.Connection, ds: Dataset) -> dict:
 
         # conversations + turns
         _copy(cur, "conversations", ["conversation_uid", "conv_type", "title", "topic_id", "book_id", "template_id",
-                                     "generator", "seed", "system_prompt", "turn_count", "pages", "quality_score"],
+                                     "generator", "seed", "system_prompt", "turn_count", "pages", "quality_score",
+                                     "hazard_flags"],
               [(uid, c.conv_type, c.title, topic_id[c.topic_index], c.volume_no, c.template_id, c.generator, c.seed,
-                c.system_prompt, len(c.turns), c.pages, c.quality_score)
+                c.system_prompt, len(c.turns), c.pages, c.quality_score,
+                hazard_flags(" ".join(t.content for t in c.turns if t.role == "hakeem")))
                for uid, c in zip(ds.conversation_uids, ds.conversations)])
         conv_id = {str(u): i for i, u in cur.execute("SELECT conversation_id, conversation_uid FROM nazria.conversations")}
 
@@ -153,6 +158,7 @@ def load(conn: psycopg.Connection, ds: Dataset) -> dict:
         _copy(cur, "conversation_turns", ["conversation_id", "turn_index", "role", "content", "source_section_ids",
                                           "source_chunk_ids"], turn_rows())
 
+        seed_questionnaire(cur)
         counts = dict(cur.execute("SELECT item, n FROM nazria.v_dataset_summary").fetchall())
         stats["db_counts"] = counts
         cur.execute("UPDATE nazria.ingest_runs SET status='succeeded', finished_at=now(), stats=%s WHERE run_id=%s",
@@ -181,7 +187,63 @@ def verify(conn: psycopg.Connection) -> list[tuple[str, bool, str]]:
         ("full-text search works (query: علاج)",
          q("SELECT count(*) FROM nazria.knowledge_chunks WHERE tsv @@ to_tsquery('simple','علاج')") > 0,
          str(q("SELECT count(*) FROM nazria.knowledge_chunks WHERE tsv @@ to_tsquery('simple','علاج')"))),
+        ("questionnaire bank seeded",
+         q("SELECT count(*) FROM nazria.questionnaire_questions WHERE active") >= 10,
+         str(q("SELECT count(*) FROM nazria.questionnaire_questions WHERE active"))),
+        ("every scored option cites a source page",
+         q("""SELECT count(*) FROM nazria.questionnaire_options
+              WHERE weights <> '{}'::jsonb AND cardinality(source_pages) = 0""") == 0, ""),
+        ("hazardous remedies flagged",
+         q("SELECT count(*) FROM nazria.remedies WHERE cardinality(hazard_flags) > 0") > 0,
+         str(q("SELECT count(*) FROM nazria.remedies WHERE cardinality(hazard_flags) > 0"))),
         ("last ingest run succeeded",
          q("SELECT status FROM nazria.ingest_runs ORDER BY run_id DESC LIMIT 1") == "succeeded", ""),
     ]
     return checks
+
+
+# --------------------------------------------------------------------------- questionnaire
+def seed_questionnaire(cur, questions: list[Question] = DEFAULT_QUESTIONS) -> None:
+    """Insert missing questions/options. Never overwrites rows a Hakeem has edited."""
+    for qi, q in enumerate(questions):
+        cur.execute("INSERT INTO nazria.questionnaire_questions (question_id, ordinal, kind, stage, text_ur) "
+                    "VALUES (%s,%s,%s,%s,%s) ON CONFLICT (question_id) DO NOTHING", (q.id, qi, q.kind, q.stage, q.text))
+        for oi, o in enumerate(q.options):
+            cur.execute("INSERT INTO nazria.questionnaire_options (question_id, option_key, ordinal, label_ur, weights, "
+                        "source_book_id, source_pages) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                        (q.id, o.key, oi, o.label, Jsonb(o.weights), SOURCE_BOOK if o.pages else None, o.pages))
+
+
+def load_questions(conn: psycopg.Connection) -> list[Question]:
+    """Active question bank from the DB (with any Hakeem edits); built-in defaults if not seeded."""
+    try:
+        qrows = conn.execute("SELECT question_id, kind, stage, text_ur FROM nazria.questionnaire_questions "
+                             "WHERE active ORDER BY ordinal").fetchall()
+    except psycopg.errors.UndefinedTable:
+        conn.rollback()
+        return DEFAULT_QUESTIONS
+    if not qrows:
+        return DEFAULT_QUESTIONS
+    opts: dict[str, list[Option]] = {}
+    for qid, key, label, weights, pages in conn.execute(
+            "SELECT question_id, option_key, label_ur, weights, source_pages FROM nazria.questionnaire_options "
+            "ORDER BY question_id, ordinal"):
+        opts.setdefault(qid, []).append(Option(key, label, dict(weights), list(pages)))
+    return [Question(qid, kind, text, stage, opts.get(qid, [])) for qid, kind, stage, text in qrows]
+
+
+def save_session(conn: psycopg.Connection, session) -> None:
+    """Upsert a consultation session and its transcript (idempotent per message index)."""
+    with conn.transaction():
+        conn.execute(
+            """INSERT INTO nazria.consultation_sessions (session_uid, engine, provider, model, status, answers, result)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (session_uid) DO UPDATE SET status = EXCLUDED.status, answers = EXCLUDED.answers,
+                   result = EXCLUDED.result, updated_at = now()""",
+            (session.session_uid, session.engine, session.provider, session.model, session.status,
+             Jsonb(session.answers), Jsonb(session.result)))
+        for i, m in enumerate(session.transcript):
+            conn.execute(
+                """INSERT INTO nazria.consultation_messages (session_uid, message_index, role, content, question_id)
+                   VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (session.session_uid, i, m["role"], m["content"], m.get("question_id")))

@@ -45,7 +45,19 @@ No header row; 1,879 records × 20 fields; UTF-8. **Dialect:** `quotechar='"'`, 
 | `conversation_reviews` | expert review (persistent) | review_status ∈ pending_review / approved / needs_edit / rejected, reviewer, notes, edited_turns |
 | `ingest_runs` | each load | pipeline_version, source_sha256, status, stats (jsonb) |
 
-Views: `v_conversations` (with review state), `v_training_messages` (chat JSON for fine-tuning), `v_dataset_summary`.
+**Schema v2 (questionnaire and safety)**
+
+| table / column | grain | key columns |
+|---|---|---|
+| `remedies.hazard_flags`, `conversations.hazard_flags` | text[] | arsenic, mercury, copper_sulphate, lead, aconite, strychnine, datura, opium, cannabis, henbane, croton, kushta |
+| `questionnaire_questions` | question | question_id, ordinal, kind (single/multi/text), stage (triage/profile/signs), text_ur, active |
+| `questionnaire_options` | answer option | label_ur, `weights` jsonb (e.g. {"عضلاتی": 2}), source_book_id, `source_pages[]` (no FK, so reloads never cascade) |
+| `consultation_sessions` | one consultation | session_uid, engine, provider, model, status (in_progress/completed/emergency/abandoned), answers, result |
+| `consultation_messages` | one message | role, content, question_id, prompt/completion tokens, latency_ms, source_chunk_ids (reserved for LLM engines) |
+
+`questionnaire_*`, `consultation_*`, `conversation_reviews` and `ingest_runs` are never truncated by a reload.
+
+Views: `v_remedies_patient_safe` (no hazard flags), `v_conversations` (with review state), `v_training_messages` (chat JSON for fine-tuning), `v_dataset_summary`.
 
 ### Page quality flags
 
