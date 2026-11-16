@@ -5,6 +5,9 @@ described for that system, e.g. vol 2 p.125–126 (light fever from muscular / g
 inflammation), p.127–128 (three kinds of constipation), p.132–134 (cough and asthma types).
 Weights are seeded into ``nazria.questionnaire_options`` so a Hakeem can tune them in the DB.
 
+Page numbers are scan pages (``source_pages.page_no``; the printed number is 3 higher here). Every weighted
+link was checked against the book text of vol 2 pp.125–134: all system directions match the book.
+
 Scoring is an *indication* of the dominant system (اعصابی / عضلاتی / غدی), not a diagnosis.
 """
 from __future__ import annotations
@@ -57,7 +60,7 @@ DEFAULT_QUESTIONS: list[Question] = [
     Question("urine_color", "single", "آپ کے پیشاب (قارورہ) کا رنگ عام طور پر کیسا رہتا ہے؟", "signs", [
         Option("red", "سرخ یا سرخی مائل", {"عضلاتی": 2}, [125, 127, 133]),
         Option("yellow", "زرد یا زردی مائل", {"غدی": 2}, [125, 127, 134]),
-        Option("white", "سفید یا سفیدی مائل", {"اعصابی": 2}, [126, 127, 134]),
+        Option("white", "سفید یا سفیدی مائل", {"اعصابی": 2}, [126, 128, 134]),
         UNKNOWN]),
     Question("bowel", "single", "اجابت (پاخانہ) کی کیا کیفیت ہے؟", "signs", [
         Option("constipation", "قبض رہتی ہے، اکثر شدید یا پرانی", {"عضلاتی": 2}, [125, 127]),
@@ -71,21 +74,21 @@ DEFAULT_QUESTIONS: list[Question] = [
         UNKNOWN]),
     Question("abdomen", "single", "پیٹ کی کیا کیفیت رہتی ہے؟", "signs", [
         Option("gas", "گیس (ریاح) اور اپھارہ زیادہ", {"عضلاتی": 1}, [125, 127, 133, 134]),
-        Option("heat_after_meal", "کھانے کے بعد حرارت بڑھ جاتی ہے یا پیٹ میں رکاوٹ محسوس ہوتی ہے", {"غدی": 1}, [126, 127]),
+        Option("heat_after_meal", "کھانے کے بعد حرارت بڑھ جاتی ہے یا پیٹ میں رکاوٹ محسوس ہوتی ہے", {"غدی": 1}, [125, 127]),
         UNKNOWN]),
     Question("taste", "single", "منہ کا ذائقہ عام طور پر کیسا رہتا ہے؟", "signs", [
         Option("sour", "ترش (کھٹا)", {"عضلاتی": 1}, [125]),
-        Option("sweet", "میٹھا", {"غدی": 1}, [125, 126]),
+        Option("sweet", "میٹھا", {"غدی": 1}, [125]),
         Option("bitter", "کڑوا", {"اعصابی": 1}, [126]),
         UNKNOWN]),
     Question("heart", "single", "کیا دل گھبراتا ہے یا دھڑکن تیز رہتی ہے؟", "signs", [
         Option("yes", "ہاں", {"عضلاتی": 1}, [133, 134]),
         Option("no", "نہیں")]),
     Question("burning_urine", "single", "کیا پیشاب میں جلن ہوتی ہے؟", "signs", [
-        Option("yes", "ہاں", {"غدی": 1}, [132, 133, 134]),
+        Option("yes", "ہاں", {"غدی": 1}, [132, 134]),
         Option("no", "نہیں")]),
     Question("catarrh", "single", "کیا نزلہ، سر درد یا جسم میں سوجن اکثر رہتی ہے؟", "signs", [
-        Option("yes", "ہاں", {"اعصابی": 1}, [127, 128]),
+        Option("yes", "ہاں", {"اعصابی": 1}, [128]),
         Option("no", "نہیں")]),
     Question("phlegm", "single", "اگر بلغم آتا ہے تو کیسا ہے؟", "signs", [
         Option("thick", "گاڑھا، مشکل سے نکلتا ہے", {"عضلاتی": 1}, [133]),

@@ -142,3 +142,10 @@ def test_engine_config_and_provider_seam(monkeypatch):
     assert isinstance(build_engine(cfg, FakeRetriever("x")), LLMEngine)   # local needs no key
     with pytest.raises(ValueError):
         build_engine(EngineConfig(engine="llm", provider="unknown", model="m"), FakeRetriever("x"))
+
+
+def test_citation_corrections_match_defaults():
+    from nazria_kb.db import CITATION_CORRECTIONS
+    by = {(q.id, o.key): o.pages for q in DEFAULT_QUESTIONS for o in q.options}
+    for qid, key, old, new in CITATION_CORRECTIONS:
+        assert by[(qid, key)] == new and old != new

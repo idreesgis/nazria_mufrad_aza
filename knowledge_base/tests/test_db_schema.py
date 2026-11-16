@@ -163,3 +163,17 @@ def test_full_load_twice_keeps_reviews_and_question_bank(conn, tmp_path):
     assert len(checks) == 12 and checks["last ingest run succeeded"] and checks["questionnaire bank seeded"]
     conn.rollback()
     conn.autocommit = True
+
+
+def test_citation_corrections_respect_hakeem_edits(conn):
+    conn.execute(SCHEMA)
+    from nazria_kb.db import seed_questionnaire
+    conn.execute("INSERT INTO nazria.questionnaire_questions VALUES ('taste',1,'single','signs','x',true),"
+                 "('catarrh',2,'single','signs','y',true)")
+    from psycopg.types.json import Jsonb
+    conn.execute("INSERT INTO nazria.questionnaire_options VALUES ('taste','sweet',1,'میٹھا',%s,2,'{125,126}'),"
+                 "('catarrh','yes',0,'ہاں',%s,2,'{200}')", (Jsonb({"غدی": 1}), Jsonb({"اعصابی": 1})))  # catarrh: Hakeem edit
+    seed_questionnaire(conn.cursor())
+    rows = dict(conn.execute("SELECT question_id, source_pages FROM nazria.questionnaire_options "
+                             "WHERE option_key IN ('sweet','yes') AND question_id IN ('taste','catarrh')").fetchall())
+    assert rows == {"taste": [125], "catarrh": [200]}
