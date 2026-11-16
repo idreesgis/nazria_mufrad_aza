@@ -40,19 +40,27 @@ pip install -r requirements.txt
 # 1. Build only (no DB): writes JSONL exports + QUALITY_REPORT.md
 python -m nazria_kb build --csv /path/to/urdu_book.csv --out output/
 
-# 2. Load into PostgreSQL (DSN from an env var — never on the command line)
+# 2. Load into PostgreSQL (DSN from an env var — never on the command line; URL-encode the password, % -> %25)
 export NAZRIA_DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require'
 python -m nazria_kb load --csv /path/to/urdu_book.csv
 
 # 3. Re-run integrity checks any time
 python -m nazria_kb verify
 
-# 4. Try a questionnaire consultation in the terminal (add --save to log it)
+# 4. Try a consultation in the terminal (add --save to log it). Engine from NAZRIA_ENGINE (default questionnaire)
 python -m nazria_kb consult
 
-# tests
+# 5. AI reviewer, provider evaluation, training export (see below)
+python -m nazria_kb review   --provider local --limit 200 [--weights]
+python -m nazria_kb evaluate --provider local,openai:<model>
+python -m nazria_kb export-training --mode human_or_ai --out output/train.jsonl
+
+# tests (no network, no real API calls). DB tests run only against a DISPOSABLE database:
 python -m pytest -q tests
+NAZRIA_TEST_DATABASE_URL='postgresql://…/scratch_db' python -m pytest -q tests
 ```
+
+Configuration: copy the variable names from `.env.example` (names only, no secrets).
 
 Alternative without Python on the target: restore the dump  
 `gunzip -c nazria_kb_dump.sql.gz | psql "$NAZRIA_DATABASE_URL"` (creates schema `nazria` only).
@@ -63,6 +71,8 @@ Alternative without Python on the target: restore the dump
 - *Review-safe*: expert decisions live in `nazria.conversation_reviews`, keyed by a deterministic `conversation_uid`, and are never truncated.
 - *Deterministic*: same CSV → same dataset (seeded templates).
 - *Least privilege*: the loader only needs `CREATE` on the database (for schema `nazria`) — use a dedicated DB user.
+- *Contained*: the reload truncates only its own tables, without `CASCADE`, so nothing outside the reload set can be emptied.
+- *No secrets in output*: database errors are printed with the DSN and password removed.
 
 ## Questionnaire consultation (works without any AI provider)
 
@@ -82,8 +92,55 @@ Safety (`nazria_kb/safety.py`):
 - The question bank lives in `questionnaire_questions` / `questionnaire_options`. A Hakeem can tune labels and weights there;
   reloads never overwrite those edits. Sessions are logged in `consultation_sessions` / `consultation_messages`.
 
-AI providers (OpenAI, DeepSeek, Claude, Gemini, local model) plug into the same engine interface:
-see **[docs/AI_PROVIDER_ARCHITECTURE.md](docs/AI_PROVIDER_ARCHITECTURE.md)** for the plan and roadmap.
+- Free-text messages are screened for red flags too (`detect_red_flags`), and every book excerpt shown to a patient
+  passes the same hazard and vulnerable-group checks as recipes.
+
+## AI engines (optional) — `llm` and `hybrid`
+
+| `NAZRIA_ENGINE` | What happens |
+|---|---|
+| `questionnaire` (default) | Rule-based, no AI provider. |
+| `llm` | Triage, age group and pregnancy questions, then free-text questions answered **only** from retrieved book passages, with جلد/صفحہ citations; "not covered" → referral to a Hakeem. |
+| `hybrid` (recommended once a provider is set) | The questionnaire does triage, intake and the tehreek indication; the LLM explains the result in natural Urdu and answers follow-ups from retrieved passages. |
+
+Providers (`NAZRIA_LLM_PROVIDER`): `local` (vLLM, Ollama, LM Studio, llama.cpp via `NAZRIA_LOCAL_STACK`; patient data stays
+on-premises), `openai`, `deepseek`, `anthropic` (Claude), `gemini`. The model name always comes from `NAZRIA_LLM_MODEL`.
+
+```bash
+export NAZRIA_ENGINE=hybrid NAZRIA_LLM_PROVIDER=local NAZRIA_LOCAL_STACK=ollama NAZRIA_LLM_MODEL=<your-model>
+python -m nazria_kb consult
+```
+
+Every generated answer is checked: red flags before the model is called, hazardous recipes replaced by the
+practitioner-only notice, no recipes for vulnerable patients, citations validated against the retrieved pages
+(no valid citation → book excerpts instead), and a disclaimer + referral appended. Provider, model, tokens, latency
+and the retrieved chunk ids are logged in `consultation_messages`. **If the provider fails, the consultation continues
+with the questionnaire** — the patient always gets an answer.
+
+### Data policy for external providers
+
+`openai`, `deepseek`, `anthropic` and `gemini` **refuse to run unless `NAZRIA_ALLOW_EXTERNAL_PROVIDERS=true`**
+(default `false`; `local` always runs). When an external provider is used: phone numbers, CNIC/ID numbers, e-mails
+and names the patient typed are removed before sending; the patient is told once that an external AI service is used;
+the provider is recorded on the session (`consultation_sessions.provider`, `external_provider = true`).
+API keys are read from environment variables (names in `.env.example`) and are never written to the DB, git or logs.
+
+### AI reviewer → human Hakeem
+
+`python -m nazria_kb review --provider <p> --limit N` judges generated conversations against their source chunks
+(groundedness, citations, safety, Urdu quality), hazard-flagged ones first, resumable, temperature 0, and stores the
+verdict with `reviewer_type = 'ai'`. A human review always overrides an AI review and is never overwritten.
+`--weights` / `--weights-only` writes `output/QUESTIONNAIRE_WEIGHTS_REVIEW.md` — a report; weights are never changed
+automatically. The hand-over guide for the Hakeem is **[docs/REVIEW_GUIDE.md](docs/REVIEW_GUIDE.md)**.
+Training export: `--mode human_only` (future default) or `--mode human_or_ai` (now; `NAZRIA_TRAINING_REVIEW_MODE`).
+
+### Provider evaluation
+
+`python -m nazria_kb evaluate --provider local,anthropic:<model> [--judge-provider local]` runs a fixed question set
+and writes `output/EVALUATION_REPORT.md` (safety handling, groundedness, citation accuracy, Urdu fluency, latency,
+tokens, cost if `NAZRIA_PRICE_*` is set).
+
+Details: **[docs/AI_PROVIDER_ARCHITECTURE.md](docs/AI_PROVIDER_ARCHITECTURE.md)**.
 
 ## Using it from the app
 

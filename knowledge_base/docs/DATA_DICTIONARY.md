@@ -57,7 +57,20 @@ No header row; 1,879 records × 20 fields; UTF-8. **Dialect:** `quotechar='"'`, 
 
 `questionnaire_*`, `consultation_*`, `conversation_reviews` and `ingest_runs` are never truncated by a reload.
 
-Views: `v_remedies_patient_safe` (no hazard flags), `v_conversations` (with review state), `v_training_messages` (chat JSON for fine-tuning), `v_dataset_summary`.
+**Schema v3 (AI providers, AI reviewer) — additive and idempotent**
+
+| table / column | type | meaning |
+|---|---|---|
+| `conversation_reviews.reviewer_type` | text, `'ai'` \| `'human'` (default `'human'`) | derived from `reviewer` by a trigger: `ai:<provider>/<model>` → `ai`, any other name → `human` |
+| `conversation_reviews.ai_details` | jsonb | AI verdict: `status`, `judge` {groundedness 1–5, citations_correct, safety, urdu_quality 1–5, notes}, `deterministic` {hazards, referral_present, cited_pages, uncited_pages, ungrounded_turns}, provider, model, tokens, latency, prompt_version. Kept after a human override. |
+| trigger `trg_guard_conversation_review` | | an AI write never replaces a human decision (status, reviewer, notes, edited_turns, reviewed_at are kept) |
+| `consultation_sessions.external_provider` | boolean | patient text of this session was sent (identifying details removed) to an external AI provider |
+| `consultation_messages` (v2 columns, now filled) | | `prompt_tokens`, `completion_tokens`, `latency_ms`, `source_chunk_ids` (passages sent to the model) for LLM answers |
+| function `training_messages(mode, include_hazardous)` | setof `v_training_messages` | `mode`: `'human_only'` or `'human_or_ai'` (default); hazard-flagged conversations excluded unless `include_hazardous` |
+
+Views: `v_remedies_patient_safe` (no hazard flags), `v_conversations` (with review state, `reviewer_type`, `edited_turns`,
+`ai_review_status`), `v_training_messages` (chat JSON for fine-tuning; reviewer `edited_turns` replace the generated turn text;
+`reviewer_type`, `hazard_flags` columns), `v_dataset_summary`.
 
 ### Page quality flags
 

@@ -2,15 +2,17 @@
 
     app / CLI ──► ConsultationEngine ──► Retriever (book knowledge) ──► PostgreSQL (nazria schema)
                       │
-                      ├── QuestionnaireEngine   (implemented: rule-based, no AI provider needed)
-                      └── LLMEngine             (planned: OpenAI / DeepSeek / local OpenAI-compatible,
-                                                 Claude, Gemini – see docs/AI_PROVIDER_ARCHITECTURE.md)
+                      ├── QuestionnaireEngine   (rule-based, no AI provider needed – the default)
+                      ├── LLMEngine             (llm_engine.py: free-text RAG over the book)
+                      └── HybridEngine          (llm_engine.py: questionnaire intake + LLM explanation/follow-ups)
+                                                 providers: providers.py – see docs/AI_PROVIDER_ARCHITECTURE.md
 
 Both kinds share the safety layer (red flags, hazard filter, disclaimer) and the same Session /
 Reply objects, so the app never changes when the engine or provider is switched by configuration.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -19,10 +21,12 @@ from typing import Protocol
 
 from .dialogues import excerpt
 from .normalize import search_key, to_int
+from .providers import PROVIDERS  # noqa: F401  (re-exported for backward compatibility)
 from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, score
-from .safety import (DISCLAIMER, EMERGENCY_MESSAGE, HAZARD_NAMES_UR, PRACTITIONER_ONLY, SELF_HARM_MESSAGE,
-                     VULNERABLE_NO_RECIPE, hazard_flags)
+from .safety import (DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, VULNERABLE_NO_RECIPE, detect_red_flags,
+                     emergency_message, hazard_flags, safe_for_patient)
 
+log = logging.getLogger("nazria_kb.engine")
 VOLUME_NAMES = {1: "جلد اول", 2: "جلد دوم"}
 STOPWORDS = set("مجھے میرا میری میرے ہے ہیں ہو ہوتا ہوتی ہوتے رہتا رہتی رہتے کی کا کے کو میں سے اور بھی بہت زیادہ "
                 "شکایت تکلیف مسئلہ مرض بیماری ہے؟ کیا آج کل دن سے ہفتوں مہینوں پرانی حکیم صاحب".split())
@@ -47,15 +51,21 @@ class Session:
     status: str = "in_progress"          # in_progress | completed | emergency
     step: int = 0
     answers: dict = field(default_factory=dict)
-    transcript: list[dict] = field(default_factory=list)   # [{"role","content","question_id"}]
+    # [{"role","content","question_id"} + for LLM turns: provider, model, prompt_tokens, completion_tokens,
+    #   latency_ms, source_chunk_ids]
+    transcript: list[dict] = field(default_factory=list)
     result: dict = field(default_factory=dict)
+    phase: str = "intake"                # LLM engines: intake | chat | followup | questionnaire (fallback)
+    external_provider: bool = False      # patient text is sent to an external AI service
+    meta: dict = field(default_factory=dict)   # engine scratch state (not stored in the DB)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Session":
-        return cls(**d)
+        known = cls.__dataclass_fields__
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 class ConsultationEngine(Protocol):
@@ -83,6 +93,7 @@ class Passage:
     content: str
     volume_no: int
     pages: list[int]
+    chunk_id: int | None = None
 
 
 class Retriever(Protocol):
@@ -125,11 +136,11 @@ class PostgresRetriever:
         if not toks:
             return []
         rows = self.conn.execute(
-            """SELECT context_path, content, book_id, pages FROM nazria.knowledge_chunks,
+            """SELECT context_path, content, book_id, pages, chunk_id FROM nazria.knowledge_chunks,
                       to_tsquery('simple', %s) q
-               WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC, quality_score DESC LIMIT %s""",
+               WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC, quality_score DESC, chunk_id LIMIT %s""",
             (" | ".join(toks), limit)).fetchall()
-        return [Passage(c, t, v, list(p)) for c, t, v, p in rows]
+        return [Passage(c, t, v, list(p), cid) for c, t, v, p, cid in rows]
 
 
 class DatasetRetriever:
@@ -152,8 +163,9 @@ class DatasetRetriever:
 
     def passages(self, query: str, limit: int = 3) -> list[Passage]:
         toks = complaint_tokens(query)
-        scored = sorted(((sum(c.text.count(t) for t in toks), c) for c in self.ds.chunks), key=lambda x: -x[0])
-        return [Passage(c.context, c.text, c.volume_no, c.pages) for n, c in scored[:limit] if n]
+        scored = sorted(((sum(c.text.count(t) for t in toks), i, c) for i, c in enumerate(self.ds.chunks)),
+                        key=lambda x: -x[0])
+        return [Passage(c.context, c.text, c.volume_no, c.pages, i) for n, i, c in scored[:limit] if n]
 
 
 # --------------------------------------------------------------------------- questionnaire engine
@@ -227,6 +239,9 @@ class QuestionnaireEngine:
             if len(message.strip()) < 2:
                 return self._ask(s, q, "براہ کرم اپنی تکلیف چند الفاظ میں لکھیں۔")
             s.answers[q.id] = message.strip()
+            flags = detect_red_flags(message)
+            if flags:   # free text is screened too, not only the numbered triage question
+                return self._emergency(s, flags)
         else:
             chosen = _parse_choice(message, len(q.options), q.kind == "multi")
             if chosen is None:
@@ -239,16 +254,19 @@ class QuestionnaireEngine:
                 s.answers[q.id] = keys[0]
         # triage stops the consultation immediately
         if q.id == "red_flags" and s.answers["red_flags"] != ["none"]:
-            s.status = "emergency"
-            msg = SELF_HARM_MESSAGE if "self_harm" in s.answers["red_flags"] else EMERGENCY_MESSAGE
-            s.result = {"outcome": "emergency_referral", "red_flags": s.answers["red_flags"]}
-            s.transcript.append({"role": "hakeem", "content": msg, "question_id": None})
-            return Reply(msg, done=True, data=s.result)
+            return self._emergency(s, s.answers["red_flags"])
         s.step += 1
         nxt = self._current(s)
         if nxt:
             return self._ask(s, nxt)
         return self._finish(s)
+
+    def _emergency(self, s: Session, flags: list[str]) -> Reply:
+        s.status = "emergency"
+        msg = emergency_message(flags)
+        s.result = {"outcome": "emergency_referral", "red_flags": flags}
+        s.transcript.append({"role": "hakeem", "content": msg, "question_id": None})
+        return Reply(msg, done=True, data=s.result)
 
     def _finish(self, s: Session) -> Reply:
         sc = score(self.questions, s.answers)
@@ -280,7 +298,9 @@ class QuestionnaireEngine:
             for role in ("definition", "overview", "symptoms", "causes"):
                 if role in by_role:
                     desc, inline_recipe = split_inline_recipe(by_role[role][0][0])
-                    lines.append(excerpt(desc, 450, 4))
+                    shown = excerpt(desc, 450, 4)
+                    if safe_for_patient(shown, vulnerable):
+                        lines.append(shown)
                     break
             recipe = "\n".join([c for c, _ in by_role.get("recipe", [])] + ([inline_recipe] if inline_recipe else []))
             if recipe:
@@ -294,9 +314,13 @@ class QuestionnaireEngine:
                     if "dosage" in by_role and not inline_recipe:
                         lines.append("مقدار خوراک: " + excerpt(by_role["dosage"][0][0], 250, 2))
             if "diet" in by_role:
-                lines += ["", "غذا کے بارے میں: " + excerpt(by_role["diet"][0][0], 400, 4)]
+                diet = excerpt(by_role["diet"][0][0], 400, 4)
+                if safe_for_patient(diet, vulnerable):
+                    lines += ["", "غذا کے بارے میں: " + diet]
         else:
-            ps = self.retriever.passages(a.get("complaint", ""), limit=2)
+            # passages are unvetted book text: they pass the same hazard / vulnerable-group checks as recipes
+            ps = [p for p in self.retriever.passages(a.get("complaint", ""), limit=4)
+                  if safe_for_patient(excerpt(p.content, 350, 3), vulnerable)][:2]
             if ps:
                 lines += ["", "اس موضوع پر کتاب کے متعلقہ اقتباسات:"]
                 for p in ps:
@@ -315,51 +339,77 @@ class QuestionnaireEngine:
         return Reply(text, done=True, data=s.result)
 
 
-# --------------------------------------------------------------------------- provider configuration (seam)
-PROVIDERS = {
-    "openai": "OpenAI Chat Completions API",
-    "deepseek": "DeepSeek (OpenAI-compatible API)",
-    "local": "Locally deployed model behind an OpenAI-compatible server (vLLM, Ollama, LM Studio, llama.cpp)",
-    "anthropic": "Anthropic Claude Messages API",
-    "gemini": "Google Gemini API",
-}
+# --------------------------------------------------------------------------- configuration
+ENGINES = ("questionnaire", "llm", "hybrid")
 
 
 @dataclass
 class EngineConfig:
-    engine: str = "questionnaire"          # questionnaire | llm
-    provider: str | None = None            # one of PROVIDERS when engine == llm
+    engine: str = "questionnaire"          # questionnaire (default) | llm | hybrid
+    provider: str | None = None            # one of providers.PROVIDERS for llm / hybrid
     model: str | None = None
-    base_url: str | None = None            # OpenAI-compatible endpoint for deepseek/local
+    base_url: str | None = None            # overrides the provider / local-stack default endpoint
+    local_stack: str | None = None         # vllm | ollama | lmstudio | llamacpp (provider=local)
     api_key_env: str | None = None         # NAME of the env var holding the key (never the key itself)
     temperature: float = 0.2
     max_tokens: int = 1024
+    timeout_s: float = 60.0
+    max_retries: int = 3
+    allow_external: bool = False           # NAZRIA_ALLOW_EXTERNAL_PROVIDERS
+    top_k: int = 4                         # retrieved passages per turn
 
     @classmethod
     def from_env(cls) -> "EngineConfig":
+        from .providers import env_flag
         e = os.environ.get
-        return cls(engine=e("NAZRIA_ENGINE", "questionnaire"), provider=e("NAZRIA_LLM_PROVIDER"),
+        return cls(engine=(e("NAZRIA_ENGINE") or "questionnaire").strip().lower(), provider=e("NAZRIA_LLM_PROVIDER"),
                    model=e("NAZRIA_LLM_MODEL"), base_url=e("NAZRIA_LLM_BASE_URL"),
-                   api_key_env=e("NAZRIA_LLM_API_KEY_ENV"),
+                   local_stack=e("NAZRIA_LOCAL_STACK"), api_key_env=e("NAZRIA_LLM_API_KEY_ENV"),
                    temperature=float(e("NAZRIA_LLM_TEMPERATURE", "0.2")),
-                   max_tokens=int(e("NAZRIA_LLM_MAX_TOKENS", "1024")))
+                   max_tokens=int(e("NAZRIA_LLM_MAX_TOKENS", "1024")),
+                   timeout_s=float(e("NAZRIA_LLM_TIMEOUT_S", "60")), max_retries=int(e("NAZRIA_LLM_MAX_RETRIES", "3")),
+                   allow_external=env_flag("NAZRIA_ALLOW_EXTERNAL_PROVIDERS"), top_k=int(e("NAZRIA_RAG_TOP_K", "4")))
+
+    def provider_config(self):
+        from .providers import ProviderConfig
+        return ProviderConfig(provider=(self.provider or "").strip().lower(), model=self.model or "",
+                              base_url=self.base_url or None, local_stack=(self.local_stack or "").strip().lower() or None,
+                              api_key_env=self.api_key_env, timeout_s=self.timeout_s, max_retries=self.max_retries,
+                              allow_external=self.allow_external)
 
     def validate(self) -> None:
-        if self.engine not in ("questionnaire", "llm"):
-            raise ValueError(f"NAZRIA_ENGINE must be 'questionnaire' or 'llm', got {self.engine!r}")
-        if self.engine == "llm":
-            if self.provider not in PROVIDERS:
-                raise ValueError(f"NAZRIA_LLM_PROVIDER must be one of {sorted(PROVIDERS)}, got {self.provider!r}")
-            if not self.model:
-                raise ValueError("NAZRIA_LLM_MODEL is required for the llm engine")
-            if self.provider in ("deepseek", "local") and not self.base_url:
-                raise ValueError("NAZRIA_LLM_BASE_URL is required for OpenAI-compatible providers")
+        """Raises ValueError for configuration mistakes (unknown engine/provider, missing model or endpoint).
+        The external-provider policy and API keys are checked when the provider is built."""
+        from .providers import ProviderError
+        if self.engine not in ENGINES:
+            raise ValueError(f"NAZRIA_ENGINE must be one of {ENGINES}, got {self.engine!r}")
+        if self.engine != "questionnaire":
+            try:
+                pc = self.provider_config()
+                pc.allow_external = True   # policy is enforced in build_provider, not a config error
+                pc.validate()
+            except ProviderError as e:
+                raise ValueError(str(e)) from None
 
 
-def build_engine(config: EngineConfig, retriever: Retriever, questions: list[Question] | None = None) -> ConsultationEngine:
+def build_engine(config: EngineConfig, retriever: Retriever, questions: list[Question] | None = None,
+                 provider=None) -> ConsultationEngine:
+    """Engine for the configuration. For llm / hybrid, a provider that cannot be built (policy, missing key,
+    missing SDK) falls back to the questionnaire engine with a logged warning – a patient always gets an answer.
+    ``fallback_reason`` is set on the returned engine in that case."""
     config.validate()
     if config.engine == "questionnaire":
         return QuestionnaireEngine(retriever, questions)
-    raise NotImplementedError(
-        f"LLM engine with provider '{config.provider}' is planned but not implemented yet "
-        "(see docs/AI_PROVIDER_ARCHITECTURE.md). Use NAZRIA_ENGINE=questionnaire.")
+    from .llm_engine import HybridEngine, LLMEngine
+    from .providers import ProviderError, build_provider
+    if provider is None:
+        try:
+            provider = build_provider(config.provider_config())
+        except ProviderError as e:
+            log.warning("AI provider unavailable, using the questionnaire engine: %s", e)
+            eng = QuestionnaireEngine(retriever, questions)
+            eng.fallback_reason = str(e)
+            return eng
+    cls = LLMEngine if config.engine == "llm" else HybridEngine
+    return cls(provider, retriever, questions, top_k=config.top_k, max_tokens=config.max_tokens,
+               temperature=config.temperature)
