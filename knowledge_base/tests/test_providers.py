@@ -233,3 +233,18 @@ def test_gemini_client_error_classified(monkeypatch):
     assert err.kind == "rate_limit" and err.retryable
     err = classify_error("gemini", errors.ClientError(403, {"error": {"message": "denied"}}))
     assert err.kind == "auth"
+
+
+def test_reasoning_blocks_are_removed_before_the_patient_sees_them():
+    from nazria_kb.providers import strip_reasoning
+    assert strip_reasoning("<think>\nسوچ: شنگرف؟\n</think>\n\nجواب (جلد دوم، صفحہ 127)") == "جواب (جلد دوم، صفحہ 127)"
+    assert strip_reasoning("<think>cut off by max_tokens") == ""
+    think = "<think>reasoning about the passages</think>جواب (جلد دوم، صفحہ 127)"
+    with MockOpenAIServer([("ok", think)]) as srv:
+        c = build_provider(local_cfg(srv.url, local_stack="ollama")).complete(MSGS, max_tokens=10, temperature=0)
+    assert c.text == "جواب (جلد دوم، صفحہ 127)"
+    with MockOpenAIServer([("ok", "<think>only thinking, never finished")]) as srv:
+        with pytest.raises(ProviderError) as e:
+            OpenAICompatibleProvider(local_cfg(srv.url, max_retries=0), sleep=NO_SLEEP).complete(
+                MSGS, max_tokens=10, temperature=0)
+    assert e.value.kind == "empty" and "NAZRIA_LLM_MAX_TOKENS" in str(e.value)
