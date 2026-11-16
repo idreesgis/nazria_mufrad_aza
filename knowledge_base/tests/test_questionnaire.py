@@ -140,8 +140,10 @@ def test_engine_config_and_provider_seam(monkeypatch):
     cfg.base_url = "http://localhost:8000/v1"
     from nazria_kb.llm_engine import LLMEngine
     assert isinstance(build_engine(cfg, FakeRetriever("x")), LLMEngine)   # local needs no key
-    with pytest.raises(ValueError):
-        build_engine(EngineConfig(engine="llm", provider="unknown", model="m"), FakeRetriever("x"))
+    eng = build_engine(EngineConfig(engine="llm", provider="unknown", model="m"), FakeRetriever("x"))
+    assert isinstance(eng, QuestionnaireEngine) and "NAZRIA_LLM_PROVIDER" in eng.fallback_reason
+    eng = build_engine(EngineConfig(engine="hybrid", provider="gemini"), FakeRetriever("x"))   # no model set
+    assert isinstance(eng, QuestionnaireEngine) and "NAZRIA_LLM_MODEL" in eng.fallback_reason
 
 
 def test_citation_corrections_match_defaults():

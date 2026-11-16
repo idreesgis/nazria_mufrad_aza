@@ -394,22 +394,28 @@ class EngineConfig:
 
 def build_engine(config: EngineConfig, retriever: Retriever, questions: list[Question] | None = None,
                  provider=None) -> ConsultationEngine:
-    """Engine for the configuration. For llm / hybrid, a provider that cannot be built (policy, missing key,
-    missing SDK) falls back to the questionnaire engine with a logged warning – a patient always gets an answer.
+    """Engine for the configuration. If the AI engine cannot be used – a configuration mistake (unknown engine
+    or provider, missing model or endpoint), the external-provider policy, a missing key or SDK – this falls back
+    to the questionnaire engine with a logged warning, so a patient always gets an answer.
     ``fallback_reason`` is set on the returned engine in that case."""
-    config.validate()
+    def fallback(reason: str) -> QuestionnaireEngine:
+        log.warning("AI engine unavailable, using the questionnaire engine: %s", reason)
+        eng = QuestionnaireEngine(retriever, questions)
+        eng.fallback_reason = reason
+        return eng
     if config.engine == "questionnaire":
         return QuestionnaireEngine(retriever, questions)
+    try:
+        config.validate()
+    except ValueError as e:
+        return fallback(str(e))
     from .llm_engine import HybridEngine, LLMEngine
     from .providers import ProviderError, build_provider
     if provider is None:
         try:
             provider = build_provider(config.provider_config())
         except ProviderError as e:
-            log.warning("AI provider unavailable, using the questionnaire engine: %s", e)
-            eng = QuestionnaireEngine(retriever, questions)
-            eng.fallback_reason = str(e)
-            return eng
+            return fallback(str(e))
     cls = LLMEngine if config.engine == "llm" else HybridEngine
     return cls(provider, retriever, questions, top_k=config.top_k, max_tokens=config.max_tokens,
                temperature=config.temperature)

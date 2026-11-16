@@ -36,7 +36,7 @@ def main(argv=None) -> int:
         from .db import DatabaseError, redact
         if isinstance(e, DatabaseError):
             sys.exit(f"database error: {e}")
-        raise RuntimeError(redact(e, os.environ.get("NAZRIA_DATABASE_URL"))) from None
+        sys.exit(f"error: {type(e).__name__}: {redact(e, os.environ.get('NAZRIA_DATABASE_URL'))}")
 
 
 def _main(argv=None) -> int:
