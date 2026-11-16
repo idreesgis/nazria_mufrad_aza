@@ -53,7 +53,7 @@ def _main(argv=None) -> int:
     v.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
     c = sub.add_parser("consult", help="run a questionnaire consultation in the terminal (uses the DB)")
     c.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
-    c.add_argument("--answers", help="answers for a scripted run: a JSON list, or plain values separated by "
+    c.add_argument("--answers", nargs="+", help="answers for a scripted run: a JSON list, or plain values separated by "
                                      "commas or | (e.g. 10,قبض,3,2,3,1,1,1,1,1,1,2,2,4)")
     c.add_argument("--save", action="store_true", help="store the session in nazria.consultation_sessions")
     r = sub.add_parser("review", help="AI review (LLM-as-judge) of generated conversations / questionnaire weights")
@@ -174,7 +174,8 @@ def _consult(args) -> int:
     from .db import connect, load_questions, save_session
     from .engine import EngineConfig, PostgresRetriever, Session, build_engine
     try:
-        scripted = parse_answers(args.answers) if args.answers else None
+        # nargs="+": without quotes the shell splits an answer at its spaces; join the words back
+        scripted = parse_answers(" ".join(args.answers)) if args.answers else None
     except ValueError as e:
         sys.exit(f"--answers: {e}")
     with connect(_dsn(args)) as conn:
