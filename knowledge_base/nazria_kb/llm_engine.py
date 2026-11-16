@@ -23,7 +23,8 @@ import re
 from dataclasses import dataclass, field
 
 from .dialogues import SYSTEM_PROMPT, excerpt
-from .engine import (Passage, QuestionnaireEngine, Reply, Retriever, Session, _page_ref, _parse_choice)
+from .engine import (VOLUME_NAMES, Passage, QuestionnaireEngine, Reply, Retriever, Session, _page_ref,
+                     _parse_choice)
 from .normalize import search_key, to_latin_digits
 from .privacy import redact_messages, redact_pii
 from .providers import LLMProvider, ProviderError, classify_error
@@ -77,8 +78,38 @@ def parse_citations(text: str) -> list[tuple[int, int, int, re.Match]]:
     return out
 
 
+PASSAGE_REF_RE = re.compile(r"\[([0-9۰-۹]{1,2})\]")
+BARE_PAGE_RE = re.compile(r"صفح(?:ہ|ات)\s*([0-9۰-۹]+)(?:\s*[–\-]\s*([0-9۰-۹]+))?")
+
+
+def normalize_citations(text: str, passages: list[Passage]) -> str:
+    """Rewrite citation styles small models use into the full «جلد …، صفحہ N» form, only when they point
+    unambiguously at a retrieved passage: «[2]» = the 2nd passage in the prompt; «صفحہ 127» without a
+    volume = the one volume among the passages that has that page. Anything else is left for check_citations."""
+    def passage_ref(m: re.Match) -> str:
+        n = int(to_latin_digits(m.group(1)))
+        if 1 <= n <= len(passages):
+            p = passages[n - 1]
+            return f"({_page_ref(p.volume_no, p.pages)})"
+        return m.group(0)
+    text = PASSAGE_REF_RE.sub(passage_ref, text or "")
+    full = [(m.start(), m.end()) for m in CITATION_RE.finditer(text)]
+    out, last = [], 0
+    for m in BARE_PAGE_RE.finditer(text):
+        if any(a <= m.start() < b for a, b in full):
+            continue
+        lo = int(to_latin_digits(m.group(1)))
+        hi = int(to_latin_digits(m.group(2))) if m.group(2) else lo
+        vols = {p.volume_no for p in passages if set(range(min(lo, hi), max(lo, hi) + 1)) & set(p.pages)}
+        if len(vols) == 1:
+            out += [text[last:m.start()], f"{VOLUME_NAMES[vols.pop()]}، "]
+            last = m.start()
+    return "".join(out) + text[last:]
+
+
 def check_citations(text: str, passages: list[Passage]) -> tuple[str, list[Passage], int, int]:
     """Remove citations to pages that were not retrieved. Returns (text, cited passages, n_invalid, n_valid)."""
+    text = normalize_citations(text, passages)
     allowed = {(p.volume_no, pg) for p in passages for pg in p.pages}
     cited: list[Passage] = []
     invalid = valid = 0
@@ -174,6 +205,7 @@ class RagResponder:
                 "completion_tokens": c.completion_tokens, "latency_ms": c.latency_ms, "retrieved": len(ps),
                 "source_chunk_ids": [p.chunk_id for p in ps if p.chunk_id is not None]}
         raw = c.text.strip()
+        log.debug("model answer (%s/%s, %s ms):\n%s", meta["provider"], c.model, c.latency_ms, raw)
         if NOT_COVERED in raw:
             return Answer(NOT_COVERED_MESSAGE, "not_covered", meta)
         # citation accuracy is measured on what the model wrote, before any paragraph is removed
@@ -181,6 +213,9 @@ class RagResponder:
         guarded, ginfo = guard_answer(raw, vulnerable)
         meta.update(ginfo)
         text, cited, _, _ = check_citations(guarded, ps)
+        log.debug("citations: %s valid, %s invalid; hazards: %s; kept for the patient: %s", meta["valid_citations"],
+                  meta["invalid_citations"], meta.get("hazards") or "none", "yes" if cited else
+                  "no (no valid citation -> book excerpts)")
         if not cited:   # an uncited answer is treated as ungrounded: show the book text itself instead
             fb = self.excerpt_answer(ps, vulnerable)
             fb.meta = {**meta, **fb.meta, "citation_missing": True}
