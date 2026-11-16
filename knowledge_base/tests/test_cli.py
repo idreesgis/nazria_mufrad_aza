@@ -28,3 +28,12 @@ def test_pipe_keeps_commas_inside_an_answer():
 def test_empty_answers_rejected():
     with pytest.raises(ValueError):
         parse_answers("[]  ")
+
+
+def test_unquoted_answers_with_spaces_are_joined_back(monkeypatch):
+    import nazria_kb.__main__ as cli
+    seen = {}
+    monkeypatch.setattr(cli, "_consult", lambda args: seen.setdefault("a", parse_answers(" ".join(args.answers))) and 0)
+    argv = ["consult", "--answers", "10,مجھے", "پرانی", "قبض", "کی", "شکایت", "ہے,3,2,ختم"]
+    cli._main(argv)
+    assert seen["a"] == ["10", "مجھے پرانی قبض کی شکایت ہے", "3", "2", "ختم"]
