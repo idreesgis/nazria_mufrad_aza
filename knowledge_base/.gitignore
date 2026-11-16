@@ -5,3 +5,6 @@ __pycache__/
 *.csv
 *.sql.gz
 nazria_kb_dump.sql
+.env
+.env.*
+!.env.example

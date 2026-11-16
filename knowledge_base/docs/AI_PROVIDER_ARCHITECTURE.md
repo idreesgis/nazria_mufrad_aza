@@ -1,4 +1,4 @@
-# AI provider architecture — plan
+# AI provider architecture
 
 **Goal:** the Hakeem app can run on any of **OpenAI, DeepSeek, Claude, Gemini, or a locally deployed
 model**, or on **no AI at all**, selected by configuration. The app, the database and the safety
@@ -13,8 +13,12 @@ rules stay the same whichever engine or provider is chosen.
 | Shared safety layer (red flags, hazard filter, vulnerable groups, disclaimer) | ✅ implemented (`nazria_kb/safety.py`) |
 | Book retrieval (PostgreSQL full-text) | ✅ implemented (`PostgresRetriever`) |
 | Provider configuration and validation (`EngineConfig`, `NAZRIA_*` env vars) | ✅ implemented |
-| Consultation log with provider, model, token and latency columns | ✅ schema v2 |
-| LLM engine and provider adapters | ⏳ planned (Phase 2–3 below) |
+| Consultation log with provider, model, token and latency columns | ✅ schema v2; filled by the LLM engines (v3) |
+| `LLMProvider` interface + adapters: openai, deepseek, local (vLLM/Ollama/LM Studio/llama.cpp), anthropic, gemini | ✅ `nazria_kb/providers.py` |
+| `llm` and `hybrid` engines (RAG, guards, fallback) | ✅ `nazria_kb/llm_engine.py` |
+| External-provider data policy (setting, PII removal, notice, session flag) | ✅ `providers.py`, `privacy.py`, schema v3 |
+| AI reviewer (conversations; weights report) | ✅ `nazria_kb/reviewer.py`, schema v3 |
+| Provider evaluation harness | ✅ `nazria_kb/evaluate.py` |
 | Semantic retrieval (pgvector embeddings) | ⏳ planned (Phase 4) |
 
 ## 1. Architecture
@@ -25,7 +29,7 @@ rules stay the same whichever engine or provider is chosen.
                                           ▼
                               ┌──── ConsultationEngine ────┐
                               │                            │
-                   QuestionnaireEngine              LLMEngine (planned)
+                   QuestionnaireEngine        LLMEngine / HybridEngine
                    (book-weighted intake,           (RAG: retrieve → prompt → generate)
                     no AI provider)                        │
                               │                     LLMProvider interface
@@ -50,83 +54,123 @@ rules stay the same whichever engine or provider is chosen.
 | Engine | Use | Needs an AI provider |
 |---|---|---|
 | `questionnaire` ✅ | Structured intake: triage, complaint, profile and 9 sign questions. Signs are weighted from vol. 2 pp. 125–134, giving the dominant system or tehreek. The matching book section is then shown, with the safe recipe, dose and diet. | No |
-| `llm` ⏳ | Free-text conversation. Each turn retrieves passages, then the model answers only from them. | Yes |
-| `hybrid` ⏳ (recommended end state) | The questionnaire collects intake and the tehreek indication deterministically; the LLM then explains and answers follow-up questions in natural Urdu, constrained to retrieved passages. | Yes |
+| `llm` ✅ | Deterministic triage, age group and pregnancy questions (the safety rules depend on them), then free-text conversation: each turn retrieves passages and the model answers only from them. | Yes |
+| `hybrid` ✅ (recommended once a provider is configured) | The questionnaire collects intake and the tehreek indication deterministically; the LLM then explains the result and answers follow-up questions in natural Urdu, constrained to retrieved passages. | Yes |
 
-## 3. Provider adapters (planned)
+**Fallback.** If the provider cannot be built (policy off, key missing, SDK missing) `build_engine` returns the
+questionnaire engine and logs why. If a call fails during a consultation (after the retries), `llm` continues the
+same session with the questionnaire (answers already given are kept) and `hybrid` keeps the questionnaire result
+and answers follow-ups with deterministic book excerpts. Unexpected exceptions are caught the same way: the
+engines never raise to the app and never leave the patient without an answer.
 
-One small interface; each provider is one adapter of about 50 lines:
+## 3. Provider adapters
 
 ```python
 class LLMProvider(Protocol):
-    name: str
-    def complete(self, messages: list[dict], *, max_tokens: int, temperature: float) -> Completion: ...
-    # Completion(text, model, prompt_tokens, completion_tokens, latency_ms)
+    name: str; model: str; external: bool
+    def complete(self, messages, *, max_tokens, temperature) -> Completion  # text, model, prompt/completion tokens, latency_ms
+    def stream(self, messages, *, max_tokens, temperature) -> Iterator[str]  # text deltas
 ```
 
-| `NAZRIA_LLM_PROVIDER` | Adapter | Notes |
-|---|---|---|
-| `openai` | OpenAI-compatible (Chat Completions) | official `openai` SDK |
-| `deepseek` | OpenAI-compatible | same adapter with DeepSeek's `base_url` |
-| `local` | OpenAI-compatible | vLLM, Ollama, LM Studio or llama.cpp server on your machine. **Recommended first target**, since you plan to deploy locally. Patient data stays on-premises. |
-| `anthropic` | Claude Messages API | official `anthropic` SDK; system prompt passed separately |
-| `gemini` | Google Gemini API | official `google-genai` SDK; role mapping `assistant` → `model` |
+| `NAZRIA_LLM_PROVIDER` | Adapter | SDK (as tested) | Notes |
+|---|---|---|---|
+| `local` | `OpenAICompatibleProvider` | `openai` 3.51 | `NAZRIA_LOCAL_STACK`: `vllm` → `http://localhost:8000/v1`, `ollama` → `:11434/v1`, `lmstudio` → `:1234/v1`, `llamacpp` → `:8080/v1`; `NAZRIA_LLM_BASE_URL` overrides. No key needed (optional `NAZRIA_LOCAL_API_KEY`). Patient data stays on-premises. |
+| `deepseek` | `OpenAICompatibleProvider` | `openai` | base URL `https://api.deepseek.com` (from DeepSeek's docs) |
+| `openai` | `OpenAICompatibleProvider` | `openai` | sends `max_completion_tokens` (OpenAI deprecated `max_tokens`); compatible servers get `max_tokens` |
+| `anthropic` | `AnthropicProvider` | `anthropic` 2.8 | system prompt as the `system` parameter; consecutive same-role turns merged. **The current Messages API has no `temperature` parameter**, so none is sent and runs are not guaranteed deterministic. The base URL is always passed explicitly so an unrelated `ANTHROPIC_BASE_URL` in the environment is ignored. |
+| `gemini` | `GeminiProvider` | `google-genai` 3.3 | `assistant` → `model` role; system → `system_instruction`; timeout passed in milliseconds |
 
-Three providers (OpenAI, DeepSeek, local) share one adapter, so the planned work is three adapters in total.
+Shared behaviour: model name only from `NAZRIA_LLM_MODEL`; SDK retries disabled and one policy applied
+(`NAZRIA_LLM_MAX_RETRIES`, exponential backoff with jitter, on timeouts, connection errors, 408/409/425/429 and 5xx);
+`NAZRIA_LLM_TIMEOUT_S` per request; every failure becomes a `ProviderError(kind=…)` with a message that names the
+fix (variable, base URL, model) and never contains the key. The current SDKs use `httpx2` as their HTTP client.
 
 ## 4. Configuration
 
 | Variable | Example | Meaning |
 |---|---|---|
-| `NAZRIA_ENGINE` | `questionnaire` (default) \| `llm` | which engine |
+| `NAZRIA_ENGINE` | `questionnaire` (default) \| `llm` \| `hybrid` | which engine |
 | `NAZRIA_LLM_PROVIDER` | `local` | one of the providers above |
-| `NAZRIA_LLM_MODEL` | name of your deployed model | required for `llm` |
-| `NAZRIA_LLM_BASE_URL` | `http://localhost:8000/v1` | required for `local` and `deepseek` |
-| `NAZRIA_LLM_API_KEY_ENV` | `OPENAI_API_KEY` | the **name** of the env var that holds the key |
+| `NAZRIA_LLM_MODEL` | name of your deployed model | required for `llm` / `hybrid` |
+| `NAZRIA_LOCAL_STACK` | `vllm` \| `ollama` \| `lmstudio` \| `llamacpp` | local preset (default URL) |
+| `NAZRIA_LLM_BASE_URL` | `http://gpu-box:8000/v1` | overrides the preset / provider URL |
+| `NAZRIA_LLM_API_KEY_ENV` | `OPENAI_API_KEY` | the **name** of the env var that holds the key (defaults per provider) |
+| `NAZRIA_ALLOW_EXTERNAL_PROVIDERS` | `false` (default) | must be `true` for openai, deepseek, anthropic, gemini |
 | `NAZRIA_LLM_TEMPERATURE` / `NAZRIA_LLM_MAX_TOKENS` | `0.2` / `1024` | generation limits |
+| `NAZRIA_LLM_TIMEOUT_S` / `NAZRIA_LLM_MAX_RETRIES` | `60` / `3` | per-request timeout, retries after the first attempt |
+| `NAZRIA_RAG_TOP_K` | `4` | passages retrieved per turn |
+| `NAZRIA_TRAINING_REVIEW_MODE` | `human_or_ai` (now) \| `human_only` (later) | default of `export-training` |
 
-API keys live only in environment variables or a secret manager: never in the database, in git, or in logs.
+See `.env.example`. API keys live only in environment variables or a secret manager: never in the database, in git, or in logs.
 
-## 5. RAG prompt contract (for the LLM engine)
+## 5. RAG prompt contract (implemented in `RagResponder`)
 
 - **System prompt:** the Hakeem persona already defined in `dialogues.SYSTEM_PROMPT`, plus the rules "answer only from the passages below", "cite جلد/صفحہ", "if the passages don't cover it, say so and refer to a Hakeem" and "never prescribe hazardous recipes".
 - **Context:** the top-k `knowledge_chunks`, each carrying `context_path` and pages, plus the questionnaire result when using `hybrid`.
+- **Before the model:** `detect_red_flags()` on every patient message (emergency → hospital referral, the model is not called);
+  no passages retrieved → "not covered" + referral without a model call. Passages that contain a hazardous recipe are
+  marked "do not repeat" in the prompt. Vulnerable patients (child, elderly, pregnant/breast-feeding — from intake or
+  mentioned in free text) get an extra "no recipe, no dose" rule.
 - **Post-checks:**
-  - Run `hazard_flags()` on the answer and replace any hazardous recipe with the practitioner-only notice.
-  - Require at least one citation.
-  - Re-run red-flag detection on every patient message.
+  - `[NOT_COVERED]` → fixed "not covered, see a Hakeem" message.
+  - `guard_answer()`: paragraphs with a hazardous ingredient are removed and replaced by the practitioner-only notice;
+    for vulnerable patients every recipe-like paragraph is removed and the no-recipe notice added.
+  - Citations are checked against the retrieved pages; invalid ones are removed. With no valid citation left the answer
+    is treated as ungrounded and replaced by deterministic book excerpts (also safety-checked).
+  - A `ماخذ:` line (cited passages) and the disclaimer with the referral are appended to every answer.
+- **Logged per answer** in `consultation_messages`: provider, model, prompt/completion tokens, latency, `source_chunk_ids`.
 
-## 6. Logging, evaluation, privacy
+## 6. External-provider data policy
 
-- **Logging:** `consultation_sessions` and `consultation_messages` already store engine, provider, model, tokens, latency and `source_chunk_ids`.
-- **Evaluation:** build a golden set from expert-approved conversations (`conversation_reviews`). Score each provider on:
-  - groundedness (is the answer supported by the cited chunk?)
-  - citation accuracy
-  - safety (hazard and red-flag handling)
-  - Urdu fluency, latency and cost
+Owner's decision: external providers **are allowed, behind a setting**.
 
-  Choose providers on these scores.
-- **Privacy:** consultations contain health information. No names are collected. Set a retention period. For data residency, prefer the `local` provider; external APIs send patient text off-premises.
+1. `NAZRIA_ALLOW_EXTERNAL_PROVIDERS` (default `false`). `openai`, `deepseek`, `anthropic` and `gemini` refuse to run
+   unless it is `true`; `local` always runs. With the setting off, a configured external provider makes the app fall
+   back to the questionnaire (the reason is logged).
+2. Before any patient text is sent off-premises, `privacy.redact_pii()` removes phone numbers, CNIC/civil-ID and other
+   long ID numbers, e-mail addresses, names the patient introduces (`میرا نام … ہے`, `نام: …`, "my name is …") and later
+   occurrences of those names. Book passages and the system prompt are not patient data and are sent as they are.
+   Ages, durations and doses are kept (they matter clinically and do not identify anyone). This is a best-effort filter.
+3. The patient is told **once per session**, in the first message, that an external AI service is used and asked not
+   to type personal details.
+4. The provider and model are stored on the session (`consultation_sessions.provider`, `.model`) together with
+   `external_provider = true`.
+5. Retention: consultation tables hold health information; set a retention period and delete old sessions
+   (`DELETE FROM nazria.consultation_sessions WHERE started_at < now() - interval '…'` cascades to messages).
+
+## 6a. Review and evaluation
+
+- **AI reviewer** (`python -m nazria_kb review`): LLM-as-judge on the generated conversations, hazard-flagged first,
+  resumable, temperature 0 (not available on Claude). Stored in `conversation_reviews` with `reviewer_type = 'ai'` and
+  `reviewer = 'ai:<provider>/<model>'`. A human review always overrides it and is never overwritten (selection,
+  upsert condition and a table trigger). The questionnaire weights get a report only. Hand-over: `docs/REVIEW_GUIDE.md`.
+- **Training export**: `training_messages('human_only')` (future default) or `training_messages('human_or_ai')` (now);
+  hazard-flagged conversations excluded unless asked; reviewer edits applied.
+- **Evaluation** (`python -m nazria_kb evaluate --provider local,openai:<model>`): fixed question set (clinical,
+  hazardous requests, red flags, vulnerable patient, out-of-scope). Measures safety handling, groundedness (lexical
+  proxy, plus an LLM-judge score with `--judge-provider`), citation accuracy, Urdu fluency, latency, tokens and cost
+  (from `NAZRIA_PRICE_<PROVIDER>_IN/OUT_PER_MTOK`). Writes `output/EVALUATION_REPORT.md` and `.json`.
 
 ## 7. Roadmap
 
 | Phase | Deliverable |
 |---|---|
 | 1 ✅ | Questionnaire engine, safety layer, provider config seam, consultation log, CLI (`python -m nazria_kb consult`) |
-| 2 | `LLMProvider` interface + OpenAI-compatible adapter (local first, then DeepSeek and OpenAI) + `llm` engine with RAG + tests using a fake provider |
-| 3 | Claude and Gemini adapters; `hybrid` engine; provider evaluation harness |
+| 2 ✅ | `LLMProvider` interface + OpenAI-compatible adapter (local, DeepSeek, OpenAI) + `llm` engine with RAG + tests using a fake provider and a mock server |
+| 3 ✅ | Claude and Gemini adapters; `hybrid` engine; data policy; AI reviewer; provider evaluation harness |
 | 4 | pgvector embeddings for semantic retrieval (local embedding model) |
 | 5 | HTTP API service (e.g. FastAPI) exposing start/reply, with Session JSON and auth |
 | 6 | Optional LLM-generated dialogue augmentation of the training set, gated by expert review |
 
-## 8. Decisions needed before Phase 2
+## 8. Decisions
 
-1. Which local serving stack (vLLM, Ollama, LM Studio or llama.cpp) and which model.
-2. Whether any external provider may receive patient text (data-protection policy).
-3. Who reviews and approves conversations and questionnaire weights (Hakeem reviewer role).
+1. Local serving stack — **all four have presets**; the model is configuration (`NAZRIA_LLM_MODEL`). Still open: which model you deploy.
+2. External providers — **allowed behind `NAZRIA_ALLOW_EXTERNAL_PROVIDERS`** (section 6).
+3. Reviewer — **AI reviewer now, a specialist Hakeem later** (section 6a, `docs/REVIEW_GUIDE.md`).
+4. Default engine — stays `questionnaire` until the owner switches to `hybrid`.
 
 
-## 9. Implementation plan — Phases 2–3 (decisions taken)
+## 9. Implementation plan — Phases 2–3 (done)
 
 Decisions from the owner: external providers are **allowed behind a setting** (`NAZRIA_ALLOW_EXTERNAL_PROVIDERS`,
 default off); an **AI reviewer** reviews for now and a human Hakeem takes over later; all four local stacks get presets.

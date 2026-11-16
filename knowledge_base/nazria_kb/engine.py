@@ -23,8 +23,8 @@ from .dialogues import excerpt
 from .normalize import search_key, to_int
 from .providers import PROVIDERS  # noqa: F401  (re-exported for backward compatibility)
 from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, score
-from .safety import (DISCLAIMER, EMERGENCY_MESSAGE, HAZARD_NAMES_UR, PRACTITIONER_ONLY, SELF_HARM_MESSAGE,
-                     VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message, hazard_flags, safe_for_patient)
+from .safety import (DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, VULNERABLE_NO_RECIPE, detect_red_flags,
+                     emergency_message, hazard_flags, safe_for_patient)
 
 log = logging.getLogger("nazria_kb.engine")
 VOLUME_NAMES = {1: "جلد اول", 2: "جلد دوم"}

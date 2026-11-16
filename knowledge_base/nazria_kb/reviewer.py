@@ -326,7 +326,7 @@ def review_weights(questions: list[Question], fetch_pages, provider: LLMProvider
                 rows.append((q, o, system, pts, res))
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Questionnaire weights — AI review (report only)", "",
+    lines = ["# Questionnaire weights — AI review (report only)", "",
              f"Reviewer: `{reviewer_id(provider)}` · prompt `{WEIGHTS_PROMPT_VERSION}` · "
              f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC", "",
              "**Nothing was changed.** Weights live in `nazria.questionnaire_options`; a Hakeem decides on every "
