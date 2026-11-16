@@ -160,9 +160,10 @@ class RagResponder:
 
     # ---- main entry
     def answer(self, s: Session, question: str, *, vulnerable: bool, context_note: str = "",
-               query_extra: str = "") -> Answer:
-        """Raises ProviderError on provider failure (the engine decides the fallback)."""
-        ps = self.retriever.passages(f"{question} {query_extra}".strip(), limit=self.top_k)
+               query: str | None = None) -> Answer:
+        """Raises ProviderError on provider failure (the engine decides the fallback).
+        ``query`` is the retrieval query (default: the question itself)."""
+        ps = self.retriever.passages((query or question).strip(), limit=self.top_k)
         if not ps:
             return Answer(NOT_COVERED_MESSAGE, "not_covered", {"retrieved": 0, "source_chunk_ids": []})
         if self.provider.external and context_note:
@@ -175,10 +176,11 @@ class RagResponder:
         raw = c.text.strip()
         if NOT_COVERED in raw:
             return Answer(NOT_COVERED_MESSAGE, "not_covered", meta)
+        # citation accuracy is measured on what the model wrote, before any paragraph is removed
+        _, _, meta["invalid_citations"], meta["valid_citations"] = check_citations(raw, ps)
         guarded, ginfo = guard_answer(raw, vulnerable)
         meta.update(ginfo)
-        text, cited, invalid, valid = check_citations(guarded, ps)
-        meta["invalid_citations"], meta["valid_citations"] = invalid, valid
+        text, cited, _, _ = check_citations(guarded, ps)
         if not cited:   # an uncited answer is treated as ungrounded: show the book text itself instead
             fb = self.excerpt_answer(ps, vulnerable)
             fb.meta = {**meta, **fb.meta, "citation_missing": True}
@@ -405,9 +407,10 @@ class HybridEngine(_LLMEngineBase):
             return self._emergency(s, flags)
         if search_key(message).lower() in END_WORDS:
             return self._close(s)
-        ans, err = self._respond(s, message, context_note=self._context_note(s), query_extra=self._query_extra(s))
+        query = f"{message} {self._query_extra(s)}"
+        ans, err = self._respond(s, message, context_note=self._context_note(s), query=query)
         if ans is None:
-            ps = self.responder.retriever.passages(f"{message} {self._query_extra(s)}", limit=4)
+            ps = self.responder.retriever.passages(query, limit=4)
             ans = RagResponder.excerpt_answer(ps, is_vulnerable(s), lead=AI_UNAVAILABLE)
             s.result["ai_fallback"] = err
         text = self._record_answer(s, message, ans)
@@ -421,7 +424,7 @@ class HybridEngine(_LLMEngineBase):
         summary_entry = s.transcript[-1]
         ask = ("سوالنامے کے اس نتیجے اور میری شکایت کو کتاب کے اقتباسات کی روشنی میں آسان اردو میں سمجھائیں۔ "
                "نسخہ دوبارہ نہ لکھیں۔")
-        ans, err = self._respond(s, ask, context_note=self._context_note(s), query_extra=self._query_extra(s))
+        ans, err = self._respond(s, ask, context_note=self._context_note(s), query=self._query_extra(s) or ask)
         s.status, s.phase = "in_progress", "followup"
         if ans is None or ans.kind != "llm":
             s.result["ai_fallback" if ans is None else "ai_explanation"] = err or ans.kind

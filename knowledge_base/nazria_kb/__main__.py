@@ -4,6 +4,12 @@
     python -m nazria_kb load   --csv urdu_book.csv [--dsn-env NAZRIA_DATABASE_URL]
     python -m nazria_kb verify [--dsn-env NAZRIA_DATABASE_URL]
     python -m nazria_kb consult [--dsn-env NAZRIA_DATABASE_URL] [--answers '["none","قبض",...]'] [--save]
+    python -m nazria_kb review   --provider local [--model M] --limit 100 [--weights | --weights-only]
+    python -m nazria_kb evaluate --provider local,openai:<model> [--judge-provider local] [--csv book.csv]
+    python -m nazria_kb export-training --mode human_or_ai|human_only [--include-hazardous] --out train.jsonl
+
+Engine and provider come from NAZRIA_* environment variables (see .env.example); API keys are read from the
+environment variable named by NAZRIA_LLM_API_KEY_ENV and are never printed.
 
 The DSN is read from an environment variable (never pass passwords on the command line).
 """
@@ -49,6 +55,26 @@ def _main(argv=None) -> int:
     c.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
     c.add_argument("--answers", help="JSON list of answers for a scripted, non-interactive run")
     c.add_argument("--save", action="store_true", help="store the session in nazria.consultation_sessions")
+    r = sub.add_parser("review", help="AI review (LLM-as-judge) of generated conversations / questionnaire weights")
+    r.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
+    r.add_argument("--provider", help="provider id (default NAZRIA_LLM_PROVIDER)")
+    r.add_argument("--model", help="model name (default NAZRIA_LLM_MODEL)")
+    r.add_argument("--limit", type=int, default=50, help="max conversations to review in this run")
+    r.add_argument("--weights", action="store_true", help="also write the questionnaire-weights report")
+    r.add_argument("--weights-only", action="store_true", help="only the questionnaire-weights report")
+    r.add_argument("--out", default="output", help="directory for the weights report")
+    e = sub.add_parser("evaluate", help="compare providers on a fixed question set; writes a markdown report")
+    e.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
+    e.add_argument("--provider", required=True, help="comma list of provider[:model], e.g. local,openai:my-model")
+    e.add_argument("--judge-provider", help="optional provider[:model] that scores groundedness and fluency")
+    e.add_argument("--csv", help="retrieve from a freshly built dataset instead of the database")
+    e.add_argument("--out", default="output/EVALUATION_REPORT.md")
+    t = sub.add_parser("export-training", help="write approved conversations as chat JSONL for fine-tuning")
+    t.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
+    t.add_argument("--mode", choices=["human_only", "human_or_ai"],
+                   default=os.environ.get("NAZRIA_TRAINING_REVIEW_MODE", "human_or_ai"))
+    t.add_argument("--include-hazardous", action="store_true", help="include hazard-flagged conversations")
+    t.add_argument("--out", default="output/training.jsonl")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -72,7 +98,75 @@ def _main(argv=None) -> int:
         from .db import connect, verify
         with connect(_dsn(args)) as conn:
             return _report(verify(conn))
+    if args.cmd == "review":
+        return _review(args)
+    if args.cmd == "evaluate":
+        return _evaluate(args)
+    if args.cmd == "export-training":
+        return _export_training(args)
     return 1
+
+
+def _provider(spec: str | None = None, model: str | None = None):
+    """Build a provider from 'name[:model]' + NAZRIA_* env; exits with a clear message if it cannot run."""
+    from .providers import ProviderConfig, ProviderError, build_provider
+    name, _, m = (spec or "").partition(":")
+    cfg = ProviderConfig.from_env(name or None, model or m or None)
+    if name and name != (os.environ.get("NAZRIA_LLM_PROVIDER") or "").strip().lower() and name != "local":
+        cfg.base_url = None      # NAZRIA_LLM_BASE_URL belongs to the configured provider only
+    try:
+        return build_provider(cfg)
+    except ProviderError as e:
+        sys.exit(f"cannot use provider: {e}")
+
+
+def _review(args) -> int:
+    from .db import connect, load_questions
+    from .reviewer import PostgresReviewStore, fetch_pages_pg, review_conversations, review_weights
+    provider = _provider(args.provider, args.model)
+    with connect(_dsn(args)) as conn:
+        conn.autocommit = True
+        if not args.weights_only:
+            def progress(n, item, status):
+                print(f"[{n}] {item.uid} {item.conv_type} {'HAZ ' if item.hazard_flags else ''}-> {status}")
+            stats = review_conversations(PostgresReviewStore(conn), provider, args.limit, progress=progress)
+            print(json.dumps(stats, ensure_ascii=False, indent=2))
+        if args.weights or args.weights_only:
+            path = review_weights(load_questions(conn), lambda b, p: fetch_pages_pg(conn, b, p), provider,
+                                  os.path.join(args.out, "QUESTIONNAIRE_WEIGHTS_REVIEW.md"))
+            print(f"weights report (nothing changed): {path}")
+    return 0
+
+
+def _evaluate(args) -> int:
+    from .evaluate import evaluate
+    providers = [_provider(s.strip()) for s in args.provider.split(",") if s.strip()]
+    judge = _provider(args.judge_provider) if args.judge_provider else None
+    if args.csv:
+        from .engine import DatasetRetriever
+        from .pipeline import build
+        path, summary = evaluate(providers, DatasetRetriever(build(args.csv)), args.out, judge)
+    else:
+        from .db import connect
+        from .engine import PostgresRetriever
+        with connect(_dsn(args)) as conn:
+            path, summary = evaluate(providers, PostgresRetriever(conn), args.out, judge)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f"report: {path}")
+    return 0
+
+
+def _export_training(args) -> int:
+    from .db import connect
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    n = 0
+    with connect(_dsn(args)) as conn, open(args.out, "w", encoding="utf-8") as fh:
+        for (rec,) in conn.execute("SELECT record FROM nazria.training_messages(%s, %s)",
+                                   (args.mode, args.include_hazardous)):
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            n += 1
+    print(f"{n} conversations ({args.mode}{', incl. hazard-flagged' if args.include_hazardous else ''}) -> {args.out}")
+    return 0
 
 
 def _consult(args) -> int:
@@ -82,7 +176,9 @@ def _consult(args) -> int:
     with connect(_dsn(args)) as conn:
         cfg = EngineConfig.from_env()
         engine = build_engine(cfg, PostgresRetriever(conn), load_questions(conn))
-        session = Session(provider=cfg.provider, model=cfg.model)
+        if getattr(engine, "fallback_reason", None):
+            print(f"[AI provider unavailable – using the questionnaire engine: {engine.fallback_reason}]")
+        session = Session()
         reply = engine.start(session)
         while True:
             print("\n" + reply.text)

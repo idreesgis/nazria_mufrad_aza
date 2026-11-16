@@ -223,3 +223,15 @@ def test_hybrid_end_to_end_through_mock_local_server():
     assert isinstance(e, HybridEngine) and "وضاحت:" in r.text and srv.requests[0]["body"]["model"] == "qwen-local"
     summary = [m for m in s.transcript if m.get("provider")][0]
     assert summary["model"] == "mock-model" and summary["prompt_tokens"] == 42
+
+
+def test_hybrid_explanation_retrieves_by_complaint_not_by_instruction():
+    class Recording(R):
+        queries = []
+
+        def passages(self, query, limit=3):
+            self.queries.append(query)
+            return super().passages(query, limit)
+    ret = Recording()
+    run_hybrid(FakeProvider([GOOD]), ret)
+    assert ret.queries[-1].startswith("مجھے پرانی قبض کی شکایت ہے")

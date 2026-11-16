@@ -1,5 +1,5 @@
 -- =====================================================================
--- Nazria Mufrad Aza knowledge base  —  PostgreSQL schema (v1)
+-- Nazria Mufrad Aza knowledge base  —  PostgreSQL schema (v1 + additive v2, v3 migrations)
 -- Source: «کلیات تحقیقات صابر ملتانی» (جلد اول + جلد دوم), OCR export
 -- All objects live in schema `nazria`. Idempotent: safe to re-run.
 -- Requires PostgreSQL >= 12 (generated columns). No extensions required.
@@ -264,26 +264,79 @@ ALTER TABLE remedies      ADD COLUMN IF NOT EXISTS hazard_flags text[] NOT NULL 
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hazard_flags text[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS ix_remedies_hazards ON remedies USING gin (hazard_flags);
 
+-- ------------------------------------------------------------------ v3 columns (added before views)
+-- Who reviewed: 'human' (a Hakeem; always wins) or 'ai' (LLM-as-judge, reviewer = 'ai:<provider>/<model>').
+-- Existing rows default to 'human'. ai_details keeps the AI verdict even after a human overrides it.
+ALTER TABLE conversation_reviews ADD COLUMN IF NOT EXISTS reviewer_type text NOT NULL DEFAULT 'human';
+ALTER TABLE conversation_reviews ADD COLUMN IF NOT EXISTS ai_details jsonb;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'conversation_reviews_reviewer_type_check'
+                     AND conrelid = 'nazria.conversation_reviews'::regclass) THEN
+        ALTER TABLE nazria.conversation_reviews
+            ADD CONSTRAINT conversation_reviews_reviewer_type_check CHECK (reviewer_type IN ('ai', 'human'));
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS ix_conversation_reviews_type ON conversation_reviews (reviewer_type, review_status);
+
+-- A human review always overrides an AI review; an AI write can never overwrite a human decision.
+-- reviewer_type follows the reviewer name ('ai:%' = AI, anything else = human), so a Hakeem who
+-- forgets to set reviewer_type is still recorded as human.
+CREATE OR REPLACE FUNCTION guard_conversation_review() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.reviewer IS NOT NULL THEN
+        NEW.reviewer_type := CASE WHEN NEW.reviewer LIKE 'ai:%' THEN 'ai' ELSE 'human' END;
+    END IF;
+    IF TG_OP = 'UPDATE' AND OLD.reviewer_type = 'human' AND OLD.reviewer IS NOT NULL
+       AND NEW.reviewer_type = 'ai' THEN
+        -- keep the human decision; only the AI's own opinion (ai_details) may be refreshed
+        NEW.review_status := OLD.review_status;
+        NEW.reviewer      := OLD.reviewer;
+        NEW.reviewer_type := OLD.reviewer_type;
+        NEW.notes         := OLD.notes;
+        NEW.edited_turns  := OLD.edited_turns;
+        NEW.reviewed_at   := OLD.reviewed_at;
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_guard_conversation_review ON conversation_reviews;
+CREATE TRIGGER trg_guard_conversation_review BEFORE INSERT OR UPDATE ON conversation_reviews
+    FOR EACH ROW EXECUTE FUNCTION guard_conversation_review();
+
 -- ------------------------------------------------------------------ views
 -- Views are dropped and recreated so that new table columns never break CREATE OR REPLACE.
 DROP VIEW IF EXISTS v_training_messages, v_conversations, v_dataset_summary, v_remedies_patient_safe CASCADE;
 CREATE VIEW v_conversations AS
-SELECT c.*, coalesce(r.review_status, 'pending_review') AS review_status, r.reviewer, r.reviewed_at
+SELECT c.*, coalesce(r.review_status, 'pending_review') AS review_status, r.reviewer, r.reviewed_at,
+       r.reviewer_type, r.edited_turns, r.ai_details ->> 'status' AS ai_review_status
 FROM conversations c
 LEFT JOIN conversation_reviews r USING (conversation_uid);
 
 -- OpenAI/HF-style chat records for fine-tuning (system + user/assistant turns).
+-- A reviewer's edited_turns replace the generated text of those turns. Use nazria.training_messages(mode)
+-- to select by review policy.
 CREATE VIEW v_training_messages AS
 SELECT c.conversation_id,
        c.conversation_uid,
        c.conv_type,
        c.review_status,
+       c.reviewer_type,
+       c.hazard_flags,
        c.quality_score,
        jsonb_build_object(
            'messages',
            jsonb_build_array(jsonb_build_object('role', 'system', 'content', c.system_prompt)) ||
            (SELECT jsonb_agg(jsonb_build_object('role', CASE t.role WHEN 'patient' THEN 'user' ELSE 'assistant' END,
-                                                'content', t.content) ORDER BY t.turn_index)
+                                                'content', coalesce(
+                                                    (SELECT e ->> 'content'
+                                                     FROM jsonb_array_elements(
+                                                              CASE WHEN jsonb_typeof(c.edited_turns) = 'array'
+                                                                   THEN c.edited_turns ELSE '[]'::jsonb END) e
+                                                     WHERE (e ->> 'turn_index')::int = t.turn_index
+                                                     LIMIT 1),
+                                                    t.content)) ORDER BY t.turn_index)
             FROM conversation_turns t WHERE t.conversation_id = c.conversation_id),
            'meta', jsonb_build_object('uid', c.conversation_uid, 'type', c.conv_type, 'title', c.title,
                                       'book_id', c.book_id, 'pages', to_jsonb(c.pages), 'template', c.template_id,
@@ -378,3 +431,33 @@ CREATE TABLE IF NOT EXISTS consultation_messages (
 -- Patient-safe remedies: no hazardous ingredient detected (still requires a Hakeem's advice).
 CREATE VIEW v_remedies_patient_safe AS
 SELECT * FROM remedies WHERE cardinality(hazard_flags) = 0;
+
+-- =====================================================================
+-- v3: AI reviewer, external-provider policy, training export modes
+-- (additive and idempotent – safe on a v1 or v2 database; reviews are never truncated)
+-- =====================================================================
+INSERT INTO schema_version (version, description)
+VALUES (3, 'AI reviewer (reviewer_type, ai_details, human-override trigger), external-provider flag, training export modes')
+ON CONFLICT (version) DO NOTHING;
+
+-- true when patient text of this session was sent (with identifying details removed) to an external AI provider
+ALTER TABLE consultation_sessions ADD COLUMN IF NOT EXISTS external_provider boolean NOT NULL DEFAULT false;
+
+-- Training export by review policy:
+--   'human_only'  – approved by a human Hakeem (the future default)
+--   'human_or_ai' – approved by a human, or approved by the AI reviewer where no human has reviewed yet (for now)
+-- Hazard-flagged conversations are excluded unless p_include_hazardous = true.
+CREATE OR REPLACE FUNCTION training_messages(p_mode text DEFAULT 'human_or_ai', p_include_hazardous boolean DEFAULT false)
+RETURNS SETOF v_training_messages
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    IF p_mode NOT IN ('human_only', 'human_or_ai') THEN
+        RAISE EXCEPTION 'training_messages: mode must be human_only or human_or_ai, got %', p_mode;
+    END IF;
+    RETURN QUERY
+        SELECT * FROM nazria.v_training_messages v
+        WHERE v.review_status = 'approved'
+          AND (v.reviewer_type = 'human' OR (p_mode = 'human_or_ai' AND v.reviewer_type = 'ai'))
+          AND (p_include_hazardous OR cardinality(v.hazard_flags) = 0)
+        ORDER BY v.conversation_id;
+END $$;

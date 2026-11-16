@@ -268,17 +268,22 @@ def load_questions(conn: psycopg.Connection) -> list[Question]:
 
 
 def save_session(conn: psycopg.Connection, session) -> None:
-    """Upsert a consultation session and its transcript (idempotent per message index)."""
+    """Upsert a consultation session and its transcript (idempotent per message index).
+    LLM turns also store provider, model, token counts, latency and the retrieved chunk ids."""
     with conn.transaction():
         conn.execute(
-            """INSERT INTO nazria.consultation_sessions (session_uid, engine, provider, model, status, answers, result)
-               VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """INSERT INTO nazria.consultation_sessions
+                   (session_uid, engine, provider, model, status, answers, result, external_provider)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (session_uid) DO UPDATE SET status = EXCLUDED.status, answers = EXCLUDED.answers,
-                   result = EXCLUDED.result, updated_at = now()""",
+                   result = EXCLUDED.result, provider = EXCLUDED.provider, model = EXCLUDED.model,
+                   external_provider = EXCLUDED.external_provider, updated_at = now()""",
             (session.session_uid, session.engine, session.provider, session.model, session.status,
-             Jsonb(session.answers), Jsonb(session.result)))
+             Jsonb(session.answers), Jsonb(session.result), bool(getattr(session, "external_provider", False))))
         for i, m in enumerate(session.transcript):
             conn.execute(
-                """INSERT INTO nazria.consultation_messages (session_uid, message_index, role, content, question_id)
-                   VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                (session.session_uid, i, m["role"], m["content"], m.get("question_id")))
+                """INSERT INTO nazria.consultation_messages (session_uid, message_index, role, content, question_id,
+                       prompt_tokens, completion_tokens, latency_ms, source_chunk_ids)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (session.session_uid, i, m["role"], m["content"], m.get("question_id"), m.get("prompt_tokens"),
+                 m.get("completion_tokens"), m.get("latency_ms"), [int(x) for x in m.get("source_chunk_ids") or []]))
