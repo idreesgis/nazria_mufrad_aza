@@ -126,6 +126,23 @@ def check_citations(text: str, passages: list[Passage]) -> tuple[str, list[Passa
     return re.sub(r"[ \t]{2,}", " ", text).strip(), list(reversed(cited)), invalid, valid
 
 
+_REPEAT_RE = re.compile(r"(.{1,12}?)\1{9,}", re.S)                     # a short unit repeated 10+ times
+_FOREIGN_SCRIPT_RE = re.compile(r"[\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]")   # Devanagari, CJK, Hangul
+_LETTER_RE = re.compile(r"[^\W\d_]")
+
+
+def degenerate_reason(text: str) -> str | None:
+    """Why a generated Urdu answer is unusable (repetition loop, wrong script), or None."""
+    m = _REPEAT_RE.search(text)
+    if m and len(m.group(0)) >= 30 and m.group(1).strip():
+        return f"repetition loop ({m.group(1)[:12]!r} x{len(m.group(0)) // len(m.group(1))})"
+    letters = len(_LETTER_RE.findall(text))
+    foreign = len(_FOREIGN_SCRIPT_RE.findall(text))
+    if letters and foreign / letters > 0.03:
+        return f"non-Urdu script ({foreign} of {letters} letters)"
+    return None
+
+
 def is_vulnerable(s: Session) -> bool:
     a = s.answers
     return a.get("age_group") in ("child", "elderly") or a.get("pregnancy") == "yes" or bool(s.meta.get("vulnerable_text"))
@@ -208,6 +225,12 @@ class RagResponder:
         log.debug("model answer (%s/%s, %s ms):\n%s", meta["provider"], c.model, c.latency_ms, raw)
         if NOT_COVERED in raw:
             return Answer(NOT_COVERED_MESSAGE, "not_covered", meta)
+        broken = degenerate_reason(raw)
+        if broken:   # repetition loop / wrong script: never shown, whatever citations it contains
+            log.debug("answer rejected as degenerate: %s", broken)
+            fb = self.excerpt_answer(ps, vulnerable)
+            fb.meta = {**meta, **fb.meta, "degenerate": broken, "valid_citations": 0, "invalid_citations": 0}
+            return fb
         # citation accuracy is measured on what the model wrote, before any paragraph is removed
         _, _, meta["invalid_citations"], meta["valid_citations"] = check_citations(raw, ps)
         guarded, ginfo = guard_answer(raw, vulnerable)
@@ -291,7 +314,8 @@ class _LLMEngineBase:
         chat += [{"role": "user", "content": question}, {"role": "assistant", "content": ans.text[:1500]}]
         s.meta["turns"] = s.meta.get("turns", 0) + 1
         s.result.setdefault("answers", []).append({"kind": ans.kind, **{k: ans.meta.get(k) for k in (
-            "hazards", "invalid_citations", "valid_citations", "citation_missing", "cited_chunk_ids")
+            "hazards", "invalid_citations", "valid_citations", "citation_missing", "cited_chunk_ids",
+            "degenerate")
             if ans.meta.get(k)}})
         return text
 
@@ -463,6 +487,8 @@ class HybridEngine(_LLMEngineBase):
         s.status, s.phase = "in_progress", "followup"
         if ans is None or ans.kind != "llm":
             s.result["ai_fallback" if ans is None else "ai_explanation"] = err or ans.kind
+            if ans is not None and ans.meta.get("degenerate"):
+                s.result["ai_rejected"] = ans.meta["degenerate"]
             text = r.text + "\n\n" + FOLLOWUP_INVITE
             summary_entry["content"] = text
             return Reply(text, data={"phase": "followup", **s.result})

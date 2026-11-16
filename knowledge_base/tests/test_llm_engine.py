@@ -256,3 +256,15 @@ def test_debug_logs_raw_model_answer(caplog):
     e, s, r = llm_session(FakeProvider(["بغیر حوالہ جواب"]))
     e.reply(s, "قبض؟")
     assert "بغیر حوالہ جواب" in caplog.text and "no valid citation" in caplog.text
+
+
+def test_degenerate_answers_are_never_shown_even_with_a_citation():
+    from nazria_kb.llm_engine import degenerate_reason
+    loop = "عضلاتی قبض (جلد دوم، صفحہ 127) میں ریاح اور نفخ شکم (پھ" + "叔" * 400
+    assert "repetition" in degenerate_reason(loop)
+    assert "non-Urdu" in degenerate_reason("یہ جواب ہے 这是中文回答这是中文回答 (جلد دوم، صفحہ 127)")
+    assert degenerate_reason(GOOD) is None and degenerate_reason("ہا ہا ہا") is None
+    e, s, r = llm_session(FakeProvider([loop]))
+    r = e.reply(s, "قبض؟")
+    assert "叔" not in r.text and "کتاب کے متعلقہ اقتباسات" in r.text
+    assert s.result["answers"][-1]["kind"] == "excerpt_fallback"
