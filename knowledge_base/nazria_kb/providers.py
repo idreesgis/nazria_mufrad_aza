@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Protocol
@@ -150,6 +151,19 @@ class ProviderConfig:
         return key or None
 
 
+# --------------------------------------------------------------------------- reasoning models
+_THINK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.S | re.I)
+_THINK_OPEN_RE = re.compile(r"<(?:think|thinking|reasoning)>.*\Z", re.S | re.I)
+
+
+def strip_reasoning(text: str | None) -> str:
+    """Remove the chain of thought that reasoning models (DeepSeek-R1, QwQ …) put in <think>…</think>.
+    It is never shown to a patient. An unclosed block (answer cut off by max_tokens) leaves no answer."""
+    text = _THINK_RE.sub("", text or "")
+    text = _THINK_OPEN_RE.sub("", text)
+    return text.replace("</think>", "").strip()
+
+
 # --------------------------------------------------------------------------- errors and retries
 def classify_error(provider: str, exc: BaseException, secret: str | None = None) -> ProviderError:
     """Map SDK / transport exceptions of any provider to a ProviderError (duck-typed, no SDK imports)."""
@@ -235,8 +249,11 @@ class _Base:
         def call() -> Completion:
             t0 = time.perf_counter()
             text, model, pt, ct = self._once(messages, max_tokens, temperature)
+            text = strip_reasoning(text)
             if not (text or "").strip():
-                raise ProviderError(self.name, "empty", "the model returned no text (blocked or empty response)", True)
+                raise ProviderError(self.name, "empty", "the model returned no answer text (blocked, empty, or only "
+                                                        "reasoning – raise NAZRIA_LLM_MAX_TOKENS for reasoning models)",
+                                    True)
             return Completion(text.strip(), model or self.model, pt, ct, int((time.perf_counter() - t0) * 1000), self.name)
         return _with_retries(call, self.name, self.cfg, self._key, self._sleep)
 
