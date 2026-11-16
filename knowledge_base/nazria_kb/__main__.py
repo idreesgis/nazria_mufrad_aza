@@ -24,6 +24,16 @@ def _dsn(args) -> str:
 
 
 def main(argv=None) -> int:
+    try:
+        return _main(argv)
+    except Exception as e:  # DB errors are already redacted; keep tracebacks (which may hold DSNs) out of logs
+        from .db import DatabaseError, redact
+        if isinstance(e, DatabaseError):
+            sys.exit(f"database error: {e}")
+        raise RuntimeError(redact(e, os.environ.get("NAZRIA_DATABASE_URL"))) from None
+
+
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="nazria_kb")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="build dataset and write JSONL exports + quality report")

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import psycopg
@@ -27,8 +28,40 @@ DATA_TABLES = ["conversation_turns", "conversations", "diet_guidelines", "remedy
                "diseases", "knowledge_chunks", "topic_sections", "topics", "source_pages", "treatises", "books"]
 
 
+class DatabaseError(RuntimeError):
+    """Connection failure with the DSN (and its password) removed from the message."""
+
+
+_URI_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I)
+_KV_PASSWORD_RE = re.compile(r"(password\s*=\s*)(\S+)", re.I)
+
+
+def normalize_dsn(dsn: str) -> str:
+    """Accept the common 'postgis://' alias and escape a bare '%' that is not a %XX escape.
+    Both are unambiguous; libpq rejects them with an error message that echoes the DSN."""
+    dsn = re.sub(r"^postgis://", "postgresql://", dsn.strip())
+    if "://" in dsn:
+        dsn = re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", dsn)
+    return dsn
+
+
+def redact(text: str, dsn: str | None = None) -> str:
+    """Remove a DSN / password from an error message before it is printed or logged."""
+    text = str(text)
+    for secret in filter(None, (dsn, dsn and normalize_dsn(dsn))):
+        text = text.replace(secret, "<DSN>")
+    return _KV_PASSWORD_RE.sub(r"\1<redacted>", _URI_RE.sub("<DSN>", text))
+
+
 def connect(dsn: str) -> psycopg.Connection:
-    return psycopg.connect(dsn, application_name="nazria_kb_loader", connect_timeout=20)
+    try:
+        return psycopg.connect(normalize_dsn(dsn), application_name="nazria_kb_loader", connect_timeout=20)
+    except Exception as e:  # never let the driver echo the DSN (it includes the password)
+        hint = ""
+        if isinstance(e, psycopg.OperationalError):
+            hint = (" – the server could not be reached or refused the connection; check the firewall / IP allowlist "
+                    "and that PostgreSQL listens on this address")
+        raise DatabaseError(f"{type(e).__name__}: {redact(e, dsn)}{hint}") from None
 
 
 def apply_schema(conn: psycopg.Connection) -> None:
@@ -52,7 +85,9 @@ def load(conn: psycopg.Connection, ds: Dataset) -> dict:
         run_id = cur.execute(
             "INSERT INTO nazria.ingest_runs (pipeline_version, source_file, source_sha256) VALUES (%s,%s,%s) RETURNING run_id",
             (PIPELINE_VERSION, Path(ds.source_path).name, ds.source_sha256)).fetchone()[0]
-        cur.execute("TRUNCATE " + ", ".join(f"nazria.{t}" for t in DATA_TABLES) + " RESTART IDENTITY CASCADE")
+        # No CASCADE: every referencing table is in DATA_TABLES, so a foreign key from outside the
+        # reload set (e.g. another schema) makes the load fail instead of silently truncating that table.
+        cur.execute("TRUNCATE " + ", ".join(f"nazria.{t}" for t in DATA_TABLES) + " RESTART IDENTITY")
 
         # books
         page_counts = {v: sum(1 for p in ds.pages if p.volume_no == v) for v in BOOKS}

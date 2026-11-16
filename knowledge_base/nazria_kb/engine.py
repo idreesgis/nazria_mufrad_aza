@@ -21,7 +21,7 @@ from .dialogues import excerpt
 from .normalize import search_key, to_int
 from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, score
 from .safety import (DISCLAIMER, EMERGENCY_MESSAGE, HAZARD_NAMES_UR, PRACTITIONER_ONLY, SELF_HARM_MESSAGE,
-                     VULNERABLE_NO_RECIPE, hazard_flags)
+                     VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message, hazard_flags, safe_for_patient)
 
 VOLUME_NAMES = {1: "جلد اول", 2: "جلد دوم"}
 STOPWORDS = set("مجھے میرا میری میرے ہے ہیں ہو ہوتا ہوتی ہوتے رہتا رہتی رہتے کی کا کے کو میں سے اور بھی بہت زیادہ "
@@ -83,6 +83,7 @@ class Passage:
     content: str
     volume_no: int
     pages: list[int]
+    chunk_id: int | None = None
 
 
 class Retriever(Protocol):
@@ -125,11 +126,11 @@ class PostgresRetriever:
         if not toks:
             return []
         rows = self.conn.execute(
-            """SELECT context_path, content, book_id, pages FROM nazria.knowledge_chunks,
+            """SELECT context_path, content, book_id, pages, chunk_id FROM nazria.knowledge_chunks,
                       to_tsquery('simple', %s) q
-               WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC, quality_score DESC LIMIT %s""",
+               WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC, quality_score DESC, chunk_id LIMIT %s""",
             (" | ".join(toks), limit)).fetchall()
-        return [Passage(c, t, v, list(p)) for c, t, v, p in rows]
+        return [Passage(c, t, v, list(p), cid) for c, t, v, p, cid in rows]
 
 
 class DatasetRetriever:
@@ -152,8 +153,9 @@ class DatasetRetriever:
 
     def passages(self, query: str, limit: int = 3) -> list[Passage]:
         toks = complaint_tokens(query)
-        scored = sorted(((sum(c.text.count(t) for t in toks), c) for c in self.ds.chunks), key=lambda x: -x[0])
-        return [Passage(c.context, c.text, c.volume_no, c.pages) for n, c in scored[:limit] if n]
+        scored = sorted(((sum(c.text.count(t) for t in toks), i, c) for i, c in enumerate(self.ds.chunks)),
+                        key=lambda x: -x[0])
+        return [Passage(c.context, c.text, c.volume_no, c.pages, i) for n, i, c in scored[:limit] if n]
 
 
 # --------------------------------------------------------------------------- questionnaire engine
@@ -227,6 +229,9 @@ class QuestionnaireEngine:
             if len(message.strip()) < 2:
                 return self._ask(s, q, "براہ کرم اپنی تکلیف چند الفاظ میں لکھیں۔")
             s.answers[q.id] = message.strip()
+            flags = detect_red_flags(message)
+            if flags:   # free text is screened too, not only the numbered triage question
+                return self._emergency(s, flags)
         else:
             chosen = _parse_choice(message, len(q.options), q.kind == "multi")
             if chosen is None:
@@ -239,16 +244,19 @@ class QuestionnaireEngine:
                 s.answers[q.id] = keys[0]
         # triage stops the consultation immediately
         if q.id == "red_flags" and s.answers["red_flags"] != ["none"]:
-            s.status = "emergency"
-            msg = SELF_HARM_MESSAGE if "self_harm" in s.answers["red_flags"] else EMERGENCY_MESSAGE
-            s.result = {"outcome": "emergency_referral", "red_flags": s.answers["red_flags"]}
-            s.transcript.append({"role": "hakeem", "content": msg, "question_id": None})
-            return Reply(msg, done=True, data=s.result)
+            return self._emergency(s, s.answers["red_flags"])
         s.step += 1
         nxt = self._current(s)
         if nxt:
             return self._ask(s, nxt)
         return self._finish(s)
+
+    def _emergency(self, s: Session, flags: list[str]) -> Reply:
+        s.status = "emergency"
+        msg = emergency_message(flags)
+        s.result = {"outcome": "emergency_referral", "red_flags": flags}
+        s.transcript.append({"role": "hakeem", "content": msg, "question_id": None})
+        return Reply(msg, done=True, data=s.result)
 
     def _finish(self, s: Session) -> Reply:
         sc = score(self.questions, s.answers)
@@ -280,7 +288,9 @@ class QuestionnaireEngine:
             for role in ("definition", "overview", "symptoms", "causes"):
                 if role in by_role:
                     desc, inline_recipe = split_inline_recipe(by_role[role][0][0])
-                    lines.append(excerpt(desc, 450, 4))
+                    shown = excerpt(desc, 450, 4)
+                    if safe_for_patient(shown, vulnerable):
+                        lines.append(shown)
                     break
             recipe = "\n".join([c for c, _ in by_role.get("recipe", [])] + ([inline_recipe] if inline_recipe else []))
             if recipe:
@@ -294,9 +304,13 @@ class QuestionnaireEngine:
                     if "dosage" in by_role and not inline_recipe:
                         lines.append("مقدار خوراک: " + excerpt(by_role["dosage"][0][0], 250, 2))
             if "diet" in by_role:
-                lines += ["", "غذا کے بارے میں: " + excerpt(by_role["diet"][0][0], 400, 4)]
+                diet = excerpt(by_role["diet"][0][0], 400, 4)
+                if safe_for_patient(diet, vulnerable):
+                    lines += ["", "غذا کے بارے میں: " + diet]
         else:
-            ps = self.retriever.passages(a.get("complaint", ""), limit=2)
+            # passages are unvetted book text: they pass the same hazard / vulnerable-group checks as recipes
+            ps = [p for p in self.retriever.passages(a.get("complaint", ""), limit=4)
+                  if safe_for_patient(excerpt(p.content, 350, 3), vulnerable)][:2]
             if ps:
                 lines += ["", "اس موضوع پر کتاب کے متعلقہ اقتباسات:"]
                 for p in ps:
