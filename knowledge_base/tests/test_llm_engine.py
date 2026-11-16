@@ -235,3 +235,24 @@ def test_hybrid_explanation_retrieves_by_complaint_not_by_instruction():
     ret = Recording()
     run_hybrid(FakeProvider([GOOD]), ret)
     assert ret.queries[-1].startswith("مجھے پرانی قبض کی شکایت ہے")
+
+
+def test_small_model_citation_styles_are_accepted_only_when_unambiguous():
+    ps = R().passages("x")                       # vol 2 p127 (chunk 11), vol 2 p128 (chunk 12)
+    text, cited, invalid, valid = check_citations("الف [1]۔ ب صفحہ 128 پر۔ ج [7]۔ د صفحہ 999۔", ps)
+    assert (valid, invalid) == (2, 0) and [p.chunk_id for p in cited] == [11, 12]
+    assert "جلد دوم، صفحہ 127" in text and "جلد دوم، صفحہ 128" in text and "[7]" in text
+
+
+def test_passage_number_citation_reaches_the_patient():
+    e, s, r = llm_session(FakeProvider(["عضلاتی قبض میں قارورہ سرخ ہوتا ہے [1]۔"]))
+    r = e.reply(s, "قبض؟")
+    assert "(جلد دوم، صفحہ 127)" in r.text and "ماخذ:" in r.text and "کتاب کے متعلقہ اقتباسات" not in r.text
+
+
+def test_debug_logs_raw_model_answer(caplog):
+    import logging
+    caplog.set_level(logging.DEBUG, logger="nazria_kb")
+    e, s, r = llm_session(FakeProvider(["بغیر حوالہ جواب"]))
+    e.reply(s, "قبض؟")
+    assert "بغیر حوالہ جواب" in caplog.text and "no valid citation" in caplog.text

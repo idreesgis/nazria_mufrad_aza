@@ -56,6 +56,8 @@ def _main(argv=None) -> int:
     c.add_argument("--answers", nargs="+", help="answers for a scripted run: a JSON list, or plain values separated by "
                                      "commas or | (e.g. 10,قبض,3,2,3,1,1,1,1,1,1,2,2,4)")
     c.add_argument("--save", action="store_true", help="store the session in nazria.consultation_sessions")
+    c.add_argument("--debug", action="store_true",
+                   help="print the model's raw answers and the citation/safety checks (development only)")
     r = sub.add_parser("review", help="AI review (LLM-as-judge) of generated conversations / questionnaire weights")
     r.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
     r.add_argument("--provider", help="provider id (default NAZRIA_LLM_PROVIDER)")
@@ -78,6 +80,8 @@ def _main(argv=None) -> int:
     t.add_argument("--out", default="output/training.jsonl")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if getattr(args, "debug", False):
+        logging.getLogger("nazria_kb").setLevel(logging.DEBUG)
 
     if args.cmd in ("build", "load"):
         from .pipeline import build
