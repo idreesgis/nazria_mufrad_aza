@@ -124,3 +124,19 @@ API keys live only in environment variables or a secret manager: never in the da
 1. Which local serving stack (vLLM, Ollama, LM Studio or llama.cpp) and which model.
 2. Whether any external provider may receive patient text (data-protection policy).
 3. Who reviews and approves conversations and questionnaire weights (Hakeem reviewer role).
+
+
+## 9. Implementation plan — Phases 2–3 (decisions taken)
+
+Decisions from the owner: external providers are **allowed behind a setting** (`NAZRIA_ALLOW_EXTERNAL_PROVIDERS`,
+default off); an **AI reviewer** reviews for now and a human Hakeem takes over later; all four local stacks get presets.
+
+| Step | Module | Content |
+|---|---|---|
+| P1 | `nazria_kb/providers.py` | `LLMProvider` protocol, `Completion`, `ProviderError`; `OpenAICompatibleProvider` (openai, deepseek, local presets vLLM/Ollama/LM Studio/llama.cpp), `AnthropicProvider`, `GeminiProvider`; retries with exponential backoff + jitter, timeouts, SDK retries disabled (one retry policy); streaming; `FakeProvider` for tests; external-provider gate |
+| P2 | `nazria_kb/privacy.py` | removes phone, CNIC/civil-ID and long ID numbers, e-mails and self-introduced names before text leaves the premises |
+| P3 | `nazria_kb/llm_engine.py` | `LLMEngine` (triage + age/pregnancy intake, then free-text RAG) and `HybridEngine` (questionnaire intake → LLM explanation and follow-ups); shared `RagResponder`: retrieve → prompt → generate → guard (hazards, vulnerable groups, citation validation against retrieved pages, `[NOT_COVERED]` → referral) → disclaimer; any failure falls back to the questionnaire / deterministic passages |
+| P4 | `sql/schema.sql` v3 | additive: `conversation_reviews.reviewer_type`, `ai_details`, human-override trigger; `consultation_sessions.external_provider`; `training_messages(mode)` function; edited turns applied in the training export |
+| P5 | `nazria_kb/reviewer.py` | `review` CLI: LLM-as-judge over conversations (hazard-flagged first, resumable, `--limit`, temperature 0) + questionnaire-weights report (never writes weights) |
+| P6 | `nazria_kb/evaluate.py` | `evaluate` CLI: fixed question set, deterministic metrics (+ optional judge), markdown report |
+| P7 | tests, docs | fake provider + mock OpenAI-compatible HTTP server + httpx mock transports for the Claude/Gemini SDKs; no real API calls; `.env.example`, `docs/REVIEW_GUIDE.md` |

@@ -138,7 +138,7 @@ def test_engine_config_and_provider_seam(monkeypatch):
     with pytest.raises(ValueError):          # local needs an OpenAI-compatible base URL
         cfg.validate()
     cfg.base_url = "http://localhost:8000/v1"
-    with pytest.raises(NotImplementedError):  # planned, not yet implemented
-        build_engine(cfg, FakeRetriever("x"))
+    from nazria_kb.llm_engine import LLMEngine
+    assert isinstance(build_engine(cfg, FakeRetriever("x")), LLMEngine)   # local needs no key
     with pytest.raises(ValueError):
         build_engine(EngineConfig(engine="llm", provider="unknown", model="m"), FakeRetriever("x"))
