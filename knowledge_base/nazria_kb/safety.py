@@ -26,7 +26,7 @@ HAZARDOUS_INGREDIENTS: dict[str, str] = {
     "افیون": "opium", "تریاک": "opium",
     "بھنگ": "cannabis", "چرس": "cannabis",
     "اجوائن خراسانی": "henbane", "بذر البنج": "henbane",
-    "جمال گوٹہ": "croton", "جمال گھوٹہ": "croton", "حب السلاطین": "croton",
+    "جمال گوٹہ": "croton", "جمال گھوٹہ": "croton", "جمال گوٹ": "croton", "جمالہ گوند": "croton", "حب السلاطین": "croton",
     "کنیر": "oleander", "شوکران": "hemlock",
 }
 KUSHTA_RE = re.compile(r"(?:^|\s)(?:کشتہ|کشتۂ|کشتے|کشتوں|کشتہء)(?:\s|$)|کشتہ جات|کشتہجات")

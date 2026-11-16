@@ -238,8 +238,22 @@ def verify(conn: psycopg.Connection) -> list[tuple[str, bool, str]]:
 
 
 # --------------------------------------------------------------------------- questionnaire
+# Page citations corrected after checking vol 2 pp.125–134 (question, option, old pages, new pages).
+# Applied only while a row still holds the old default, so a Hakeem's own edit is never overwritten.
+CITATION_CORRECTIONS = [
+    ("urine_color", "white", [126, 127, 134], [126, 128, 134]),
+    ("abdomen", "heat_after_meal", [126, 127], [125, 127]),
+    ("taste", "sweet", [125, 126], [125]),
+    ("burning_urine", "yes", [132, 133, 134], [132, 134]),
+    ("catarrh", "yes", [127, 128], [128]),
+]
+
+
 def seed_questionnaire(cur, questions: list[Question] = DEFAULT_QUESTIONS) -> None:
     """Insert missing questions/options. Never overwrites rows a Hakeem has edited."""
+    for qid, key, old, new in CITATION_CORRECTIONS:
+        cur.execute("UPDATE nazria.questionnaire_options SET source_pages = %s::int[] "
+                    "WHERE question_id = %s AND option_key = %s AND source_pages = %s::int[]", (new, qid, key, old))
     for qi, q in enumerate(questions):
         cur.execute("INSERT INTO nazria.questionnaire_questions (question_id, ordinal, kind, stage, text_ur) "
                     "VALUES (%s,%s,%s,%s,%s) ON CONFLICT (question_id) DO NOTHING", (q.id, qi, q.kind, q.stage, q.text))
