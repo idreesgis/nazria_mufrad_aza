@@ -55,12 +55,19 @@ RAG_RULES = """
 3. اگر اقتباسات میں سوال کا جواب موجود نہ ہو تو صرف یہ لکھیں: [NOT_COVERED]
 4. سنکھیا، پارہ، شنگرف، کچلہ، افیون، بھنگ، دھتورا یا کسی بھی کشتے والا نسخہ کبھی نہ لکھیں۔
 5. تشخیص کا دعویٰ نہ کریں؛ آخر میں مستند حکیم سے نبض و قارورہ کے معائنے کا مشورہ دیں۔
-6. جواب سادہ، شائستہ اور مختصر اردو میں دیں (زیادہ سے زیادہ 8 جملے)۔
+6. جواب سادہ، شائستہ اور مختصر اردو میں دیں (زیادہ سے زیادہ 8 جملے)۔ صرف اردو حروف استعمال کریں؛ انگریزی، ہندی یا
+کسی اور زبان کا کوئی لفظ یا حرف نہ لکھیں۔ جملے کے آخر میں «۔» لگائیں۔
+7. حکیم کی طرف سے بات کریں («آپ کی تکلیف…»)؛ مریض کے الفاظ «مجھے…» کی شکل میں نہ دہرائیں۔
+8. ہسپتال یا ایمرجنسی کا مشورہ اپنی طرف سے نہ دیں؛ خطرناک علامات کی جانچ پہلے ہو چکی ہے۔
+9. [NOT_COVERED] صرف اکیلا لکھیں، کسی جواب کے ساتھ یا اس کے آخر میں ہرگز نہ لکھیں۔
+مثال (صرف انداز کے لیے): «کتاب کے مطابق عضلاتی قبض اکثر پرانی ہوتی ہے اور اس میں ریاح زیادہ ہوتی ہے (جلد دوم، صفحہ 127)۔
+دوا شروع کرنے سے پہلے کسی مستند حکیم سے نبض و قارورہ کا معائنہ کروائیں۔»
 Rules (English summary): answer ONLY from the passages; cite (جلد …، صفحہ N) for every clinical statement using only
-the cited pages given; if the passages do not answer the question output exactly [NOT_COVERED]; never give hazardous
-recipes; no diagnosis; answer in Urdu.
+the cited pages given; if the passages do not answer the question output exactly [NOT_COVERED] and nothing else; never
+give hazardous recipes; no diagnosis; no emergency/hospital advice of your own; speak as the hakeem, never echo the
+patient in the first person; Urdu script only, no English, Hindi or Chinese words or characters.
 """.strip()
-VULNERABLE_RULE = "7. یہ مریض بچہ، حاملہ/دودھ پلانے والی خاتون یا بزرگ ہے: کوئی نسخہ، دوا یا مقدار خوراک ہرگز نہ لکھیں۔"
+VULNERABLE_RULE = "10. یہ مریض بچہ، حاملہ/دودھ پلانے والی خاتون یا بزرگ ہے: کوئی نسخہ، دوا یا مقدار خوراک ہرگز نہ لکھیں۔"
 
 _VOL = {"اول": 1, "1": 1, "دوم": 2, "2": 2}
 CITATION_RE = re.compile(r"\(?\s*جلد\s*(اول|دوم|[12۱۲])\s*[،,]?\s*(?:صفحہ|صفحات|ص)\s*([0-9۰-۹]+)"
@@ -127,7 +134,11 @@ def check_citations(text: str, passages: list[Passage]) -> tuple[str, list[Passa
 
 
 _REPEAT_RE = re.compile(r"(.{1,12}?)\1{9,}", re.S)                     # a short unit repeated 10+ times
-_FOREIGN_SCRIPT_RE = re.compile(r"[\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]")   # Devanagari, CJK, Hangul
+# Cyrillic, Devanagari, Thai, CJK, Hangul: never part of an Urdu answer. Even one such character (gemma2 wrote
+# «م比ں») means the model slipped out of Urdu, so the answer is not shown to the patient.
+_FOREIGN_SCRIPT_RE = re.compile(r"[\u0400-\u04FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF"
+                                r"\uAC00-\uD7AF\uF900-\uFAFF]")
+_URDU_FULL_STOP_RE = re.compile(r"(?<=[\u0600-\u06FF)])[ \t]*\.(?![.\d])")
 _LETTER_RE = re.compile(r"[^\W\d_]")
 
 
@@ -136,11 +147,16 @@ def degenerate_reason(text: str) -> str | None:
     m = _REPEAT_RE.search(text)
     if m and len(m.group(0)) >= 30 and m.group(1).strip():
         return f"repetition loop ({m.group(1)[:12]!r} x{len(m.group(0)) // len(m.group(1))})"
-    letters = len(_LETTER_RE.findall(text))
-    foreign = len(_FOREIGN_SCRIPT_RE.findall(text))
-    if letters and foreign / letters > 0.03:
-        return f"non-Urdu script ({foreign} of {letters} letters)"
+    foreign = _FOREIGN_SCRIPT_RE.findall(text)
+    if foreign:
+        letters = len(_LETTER_RE.findall(text))
+        return f"non-Urdu script ({len(foreign)} of {letters} letters: {''.join(foreign[:5])!r})"
     return None
+
+
+def tidy_urdu(text: str) -> str:
+    """Cosmetic: a Latin full stop right after an Urdu word becomes «۔» (numbers and «...» are left alone)."""
+    return _URDU_FULL_STOP_RE.sub("۔", text)
 
 
 def is_vulnerable(s: Session) -> bool:
@@ -236,6 +252,7 @@ class RagResponder:
         guarded, ginfo = guard_answer(raw, vulnerable)
         meta.update(ginfo)
         text, cited, _, _ = check_citations(guarded, ps)
+        text = tidy_urdu(text)
         log.debug("citations: %s valid, %s invalid; hazards: %s; kept for the patient: %s", meta["valid_citations"],
                   meta["invalid_citations"], meta.get("hazards") or "none", "yes" if cited else
                   "no (no valid citation -> book excerpts)")
