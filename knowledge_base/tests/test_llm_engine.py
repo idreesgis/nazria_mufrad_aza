@@ -268,3 +268,31 @@ def test_degenerate_answers_are_never_shown_even_with_a_citation():
     r = e.reply(s, "قبض؟")
     assert "叔" not in r.text and "کتاب کے متعلقہ اقتباسات" in r.text
     assert s.result["answers"][-1]["kind"] == "excerpt_fallback"
+
+
+def test_a_single_foreign_character_rejects_the_answer():
+    """gemma2:9b wrote «م比ں» inside an otherwise good, cited answer: it must not reach the patient."""
+    from nazria_kb.llm_engine import degenerate_reason
+    slip = "آپ کی شکایت عضلاتی قبض کی علامتوں سے م比ں ہے (جلد دوم، صفحہ 127)۔"
+    assert "non-Urdu" in degenerate_reason(slip) and "比" in degenerate_reason(slip)
+    assert "non-Urdu" in degenerate_reason("یہ قبض है (جلد دوم، صفحہ 127)")      # Devanagari
+    assert "non-Urdu" in degenerate_reason("یہ قبض ПРИВЕТ (جلد دوم، صفحہ 127)")   # Cyrillic
+    assert degenerate_reason("قبض constipation (جلد دوم، صفحہ 127)") is None        # Latin is the prompt's job
+    e, s, r = llm_session(FakeProvider([slip]))
+    r = e.reply(s, "قبض؟")
+    assert "比" not in r.text and s.result["answers"][-1]["kind"] == "excerpt_fallback"
+
+
+def test_latin_full_stops_after_urdu_become_urdu_full_stops():
+    from nazria_kb.llm_engine import tidy_urdu
+    assert tidy_urdu("قبض شدید ہوتی ہے. ریاح زیادہ ہوتی ہے (جلد دوم، صفحہ 127).") == \
+        "قبض شدید ہوتی ہے۔ ریاح زیادہ ہوتی ہے (جلد دوم، صفحہ 127)۔"
+    assert tidy_urdu("خوراک 2.5 ماشہ ...") == "خوراک 2.5 ماشہ ..."
+    e, s, r = llm_session(FakeProvider(["عضلاتی قبض شدید ہوتی ہے (جلد دوم، صفحہ 127)."]))
+    assert "(جلد دوم، صفحہ 127)۔" in e.reply(s, "قبض؟").text
+
+
+def test_prompt_carries_the_small_model_rules():
+    from nazria_kb.llm_engine import RAG_RULES, VULNERABLE_RULE
+    assert "انگریزی" in RAG_RULES and "ہسپتال" in RAG_RULES and "مجھے" in RAG_RULES
+    assert "(جلد دوم، صفحہ 127)" in RAG_RULES and VULNERABLE_RULE.startswith("10.")
