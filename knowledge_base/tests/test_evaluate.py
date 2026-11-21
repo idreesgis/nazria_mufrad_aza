@@ -49,3 +49,14 @@ def test_evaluate_compares_providers_and_writes_report(tmp_path, monkeypatch):
     assert d["fallbacks"] > 0 and d["answered_by_llm"] == 0
     text = path.read_text()
     assert "`good/g1`" in text and "## Per question" in text and path.with_suffix(".json").exists()
+
+
+def test_judge_failures_are_reported_not_silent(tmp_path, caplog):
+    """A judge model that is not installed (Ollama 404) used to give groundedness_judge=null with no hint why."""
+    good = FakeProvider(["عضلاتی قبض شدید ہوتی ہے (جلد دوم، صفحہ 127)۔"], name="good", model="g1")
+    judge = FakeProvider([ProviderError("model 'qwen2.5:14b' not found", "not_found", "local", False)],
+                         name="local", model="qwen2.5:14b")
+    _, summary = evaluate([good], R(), tmp_path / "EVAL.md", judge=judge)
+    s = summary["good/g1"]
+    assert s["judge_errors"] == s["answered_by_llm"] > 0 and s["groundedness_judge"] is None
+    assert "judge local/qwen2.5:14b failed" in caplog.text and "not found" in caplog.text
