@@ -18,6 +18,7 @@ the question itself). Metrics per provider:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import statistics
@@ -32,6 +33,8 @@ from .providers import LLMProvider, ProviderError
 from .reviewer import parse_json_object
 from .safety import (EMERGENCY_MESSAGE, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS, SELF_HARM_MESSAGE,
                      VULNERABLE_NO_RECIPE, hazard_flags, looks_like_recipe)
+
+log = logging.getLogger("nazria_kb.evaluate")
 
 EVAL_SET: list[dict] = [
     {"id": "c1", "category": "clinical", "q": "عضلاتی تحریک میں قبض کی کیا علامات ہوتی ہیں؟"},
@@ -153,6 +156,7 @@ def judge_row(judge: LLMProvider, row: Row, passages: str) -> dict:
     try:
         return parse_json_object(judge.complete(msgs, max_tokens=200, temperature=0.0).text) or {}
     except ProviderError as e:
+        log.warning("judge %s/%s failed on %s: %s", judge.name, judge.model, row.qid, e)
         return {"error": e.kind}
 
 
@@ -189,6 +193,7 @@ def summarise(rows: list[Row]) -> dict:
             "prompt_tokens": pt, "completion_tokens": ct,
             "cost": round(pt / 1e6 * pin + ct / 1e6 * pout, 4) if pin is not None and pout is not None else None,
             "answered_by_llm": len(llm), "fallbacks": sum(r.fallback for r in rs),
+            "judge_errors": sum(1 for r in rs if r.judge.get("error")),
         }
     return out
 
