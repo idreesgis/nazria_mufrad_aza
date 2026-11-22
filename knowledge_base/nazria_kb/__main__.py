@@ -68,8 +68,10 @@ def _main(argv=None) -> int:
     r.add_argument("--out", default="output", help="directory for the weights report")
     e = sub.add_parser("evaluate", help="compare providers on a fixed question set; writes a markdown report")
     e.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
-    e.add_argument("--provider", required=True, help="comma list of provider[:model], e.g. local,openai:my-model")
-    e.add_argument("--judge-provider", help="optional provider[:model] that scores groundedness and fluency")
+    e.add_argument("--provider", default="gemini",
+                   help="comma list of provider[:model] (default gemini, i.e. gemini-4-hydrogen)")
+    e.add_argument("--judge-provider", default="gemini",
+                   help="provider[:model] that scores groundedness and fluency (default gemini); 'none' to skip")
     e.add_argument("--csv", help="retrieve from a freshly built dataset instead of the database")
     e.add_argument("--out", default="output/EVALUATION_REPORT.md")
     t = sub.add_parser("export-training", help="write approved conversations as chat JSONL for fine-tuning")
@@ -146,7 +148,7 @@ def _review(args) -> int:
 def _evaluate(args) -> int:
     from .evaluate import evaluate
     providers = [_provider(s.strip()) for s in args.provider.split(",") if s.strip()]
-    judge = _provider(args.judge_provider) if args.judge_provider else None
+    judge = _provider(args.judge_provider) if args.judge_provider and args.judge_provider.lower() != "none" else None
     if args.csv:
         from .engine import DatasetRetriever
         from .pipeline import build
