@@ -39,7 +39,7 @@ def test_unquoted_answers_with_spaces_are_joined_back(monkeypatch):
     assert seen["a"] == ["10", "مجھے پرانی قبض کی شکایت ہے", "3", "2", "ختم"]
 
 
-def test_evaluate_defaults_to_gemini_4_hydrogen_for_answers_and_judge(monkeypatch, tmp_path):
+def test_evaluate_defaults_to_gemini_3_5_flash_for_answers_and_judge(monkeypatch, tmp_path):
     import nazria_kb.engine as engine_mod
     import nazria_kb.evaluate as evaluate_mod
     import nazria_kb.pipeline as pipeline_mod
@@ -58,5 +58,5 @@ def test_evaluate_defaults_to_gemini_4_hydrogen_for_answers_and_judge(monkeypatc
     monkeypatch.setattr(pipeline_mod, "build", lambda csv: None)
     monkeypatch.setattr(engine_mod, "DatasetRetriever", lambda ds: None)
     assert main(["evaluate", "--csv", "x.csv"]) == 0
-    assert seen == {"providers": [("gemini", "gemini-4-hydrogen")], "judge": ("gemini", "gemini-4-hydrogen")}
+    assert seen == {"providers": [("gemini", "gemini-3.5-flash")], "judge": ("gemini", "gemini-3.5-flash")}
     assert main(["evaluate", "--csv", "x.csv", "--judge-provider", "none"]) == 0 and seen["judge"] is None

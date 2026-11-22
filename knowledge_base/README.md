@@ -52,7 +52,7 @@ python -m nazria_kb consult
 
 # 5. AI reviewer, provider evaluation, training export (see below)
 python -m nazria_kb review   --provider local --limit 200 [--weights]
-python -m nazria_kb evaluate                      # gemini-4-hydrogen, judged by gemini-4-hydrogen
+python -m nazria_kb evaluate                      # gemini-3.5-flash, judged by gemini-3.5-flash
 python -m nazria_kb export-training --mode human_or_ai --out output/train.jsonl
 
 # tests (no network, no real API calls). DB tests run only against a DISPOSABLE database:
@@ -105,7 +105,7 @@ Safety (`nazria_kb/safety.py`):
 
 Providers (`NAZRIA_LLM_PROVIDER`): `local` (vLLM, Ollama, LM Studio, llama.cpp via `NAZRIA_LOCAL_STACK`; patient data stays
 on-premises), `openai`, `deepseek`, `anthropic` (Claude), `gemini`. **Project default: `gemini` with the model
-`gemini-4-hydrogen`**, used when `NAZRIA_LLM_PROVIDER` / `NAZRIA_LLM_MODEL` are not set (both can be overridden).
+`gemini-3.5-flash`**, used when `NAZRIA_LLM_PROVIDER` / `NAZRIA_LLM_MODEL` are not set (both can be overridden).
 
 ```bash
 export NAZRIA_ENGINE=hybrid NAZRIA_ALLOW_EXTERNAL_PROVIDERS=true GEMINI_API_KEY=...   # key from your secret store
@@ -137,7 +137,7 @@ Training export: `--mode human_only` (future default) or `--mode human_or_ai` (n
 
 ### Provider evaluation
 
-`python -m nazria_kb evaluate` (default: `gemini-4-hydrogen`, judged by `gemini-4-hydrogen`; other providers with
+`python -m nazria_kb evaluate` (default: `gemini-3.5-flash`, judged by `gemini-3.5-flash`; other providers with
 `--provider gemini,anthropic:<model>`, no judge with `--judge-provider none`) runs a fixed question set
 and writes `output/EVALUATION_REPORT.md` (safety handling, groundedness, citation accuracy, Urdu fluency, latency,
 tokens, cost if `NAZRIA_PRICE_*` is set).

@@ -48,7 +48,7 @@ DEFAULT_BASE_URLS = {"deepseek": "https://api.deepseek.com", "anthropic": "https
 # Project default: Google Gemini with this model. Used whenever NAZRIA_LLM_PROVIDER / NAZRIA_LLM_MODEL are not set;
 # both can still be overridden by configuration.
 DEFAULT_PROVIDER = "gemini"
-DEFAULT_MODELS = {"gemini": "gemini-4-hydrogen"}
+DEFAULT_MODELS = {"gemini": "gemini-3.5-flash"}
 DEFAULT_API_KEY_ENV = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
                        "gemini": "GEMINI_API_KEY", "local": "NAZRIA_LOCAL_API_KEY"}
 _TRUE = {"1", "true", "yes", "on"}
