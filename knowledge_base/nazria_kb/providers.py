@@ -45,6 +45,10 @@ LOCAL_STACKS = {                       # default OpenAI-compatible endpoints; NA
     "llamacpp": "http://localhost:8080/v1",
 }
 DEFAULT_BASE_URLS = {"deepseek": "https://api.deepseek.com", "anthropic": "https://api.anthropic.com"}
+# Project default: Google Gemini with this model. Used whenever NAZRIA_LLM_PROVIDER / NAZRIA_LLM_MODEL are not set;
+# both can still be overridden by configuration.
+DEFAULT_PROVIDER = "gemini"
+DEFAULT_MODELS = {"gemini": "gemini-4-hydrogen"}
 DEFAULT_API_KEY_ENV = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
                        "gemini": "GEMINI_API_KEY", "local": "NAZRIA_LOCAL_API_KEY"}
 _TRUE = {"1", "true", "yes", "on"}
@@ -102,8 +106,11 @@ class ProviderConfig:
     @classmethod
     def from_env(cls, provider: str | None = None, model: str | None = None) -> "ProviderConfig":
         e = os.environ.get
-        return cls(provider=(provider or e("NAZRIA_LLM_PROVIDER") or "").strip().lower(),
-                   model=model or e("NAZRIA_LLM_MODEL") or "", base_url=e("NAZRIA_LLM_BASE_URL") or None,
+        configured = (e("NAZRIA_LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+        name = (provider or configured).strip().lower()
+        # NAZRIA_LLM_MODEL belongs to the configured provider; another provider gets its own default model
+        model = model or (e("NAZRIA_LLM_MODEL") if name == configured else None) or DEFAULT_MODELS.get(name, "")
+        return cls(provider=name, model=model, base_url=e("NAZRIA_LLM_BASE_URL") or None,
                    local_stack=(e("NAZRIA_LOCAL_STACK") or "").strip().lower() or None,
                    api_key_env=e("NAZRIA_LLM_API_KEY_ENV") or None,
                    timeout_s=float(e("NAZRIA_LLM_TIMEOUT_S", "60")), max_retries=int(e("NAZRIA_LLM_MAX_RETRIES", "3")),

@@ -360,10 +360,11 @@ class EngineConfig:
 
     @classmethod
     def from_env(cls) -> "EngineConfig":
-        from .providers import env_flag
+        from .providers import DEFAULT_MODELS, DEFAULT_PROVIDER, env_flag
         e = os.environ.get
-        return cls(engine=(e("NAZRIA_ENGINE") or "questionnaire").strip().lower(), provider=e("NAZRIA_LLM_PROVIDER"),
-                   model=e("NAZRIA_LLM_MODEL"), base_url=e("NAZRIA_LLM_BASE_URL"),
+        provider = (e("NAZRIA_LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+        return cls(engine=(e("NAZRIA_ENGINE") or "questionnaire").strip().lower(), provider=provider,
+                   model=e("NAZRIA_LLM_MODEL") or DEFAULT_MODELS.get(provider), base_url=e("NAZRIA_LLM_BASE_URL"),
                    local_stack=e("NAZRIA_LOCAL_STACK"), api_key_env=e("NAZRIA_LLM_API_KEY_ENV"),
                    temperature=float(e("NAZRIA_LLM_TEMPERATURE", "0.2")),
                    max_tokens=int(e("NAZRIA_LLM_MAX_TOKENS", "1024")),

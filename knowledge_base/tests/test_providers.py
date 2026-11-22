@@ -258,3 +258,29 @@ def test_reasoning_blocks_are_removed_before_the_patient_sees_them():
             OpenAICompatibleProvider(local_cfg(srv.url, max_retries=0), sleep=NO_SLEEP).complete(
                 MSGS, max_tokens=10, temperature=0)
     assert e.value.kind == "empty" and "NAZRIA_LLM_MAX_TOKENS" in str(e.value)
+
+
+def test_project_default_is_gemini_4_hydrogen(monkeypatch):
+    cfg = ProviderConfig.from_env()
+    assert (cfg.provider, cfg.model, cfg.key_env()) == ("gemini", "gemini-4-hydrogen", "GEMINI_API_KEY")
+    # a model configured for another provider (e.g. an old local .env) is not sent to Gemini
+    monkeypatch.setenv("NAZRIA_LLM_PROVIDER", "local")
+    monkeypatch.setenv("NAZRIA_LLM_MODEL", "gemma2:9b")
+    assert ProviderConfig.from_env("gemini").model == "gemini-4-hydrogen"
+    assert ProviderConfig.from_env().model == "gemma2:9b"                    # explicit configuration still wins
+    assert ProviderConfig.from_env("gemini", "gemini-other").model == "gemini-other"
+
+
+def test_engine_default_provider_is_gemini_but_engine_stays_questionnaire(monkeypatch):
+    from nazria_kb.engine import EngineConfig, QuestionnaireEngine, build_engine
+    monkeypatch.delenv("NAZRIA_ENGINE", raising=False)
+    cfg = EngineConfig.from_env()
+    assert (cfg.engine, cfg.provider, cfg.model) == ("questionnaire", "gemini", "gemini-4-hydrogen")
+    monkeypatch.setenv("NAZRIA_ENGINE", "hybrid")
+    eng = build_engine(EngineConfig.from_env(), retriever=None)
+    assert isinstance(eng, QuestionnaireEngine) and "NAZRIA_ALLOW_EXTERNAL_PROVIDERS" in eng.fallback_reason
+    monkeypatch.setenv("NAZRIA_ALLOW_EXTERNAL_PROVIDERS", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    pc = EngineConfig.from_env().provider_config()
+    pc.validate()
+    assert (pc.provider, pc.model, pc.api_key()) == ("gemini", "gemini-4-hydrogen", "g-test")

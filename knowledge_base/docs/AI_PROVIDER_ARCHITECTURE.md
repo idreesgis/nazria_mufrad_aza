@@ -90,8 +90,8 @@ fix (variable, base URL, model) and never contains the key. The current SDKs use
 | Variable | Example | Meaning |
 |---|---|---|
 | `NAZRIA_ENGINE` | `questionnaire` (default) \| `llm` \| `hybrid` | which engine |
-| `NAZRIA_LLM_PROVIDER` | `local` | one of the providers above |
-| `NAZRIA_LLM_MODEL` | name of your deployed model | required for `llm` / `hybrid` |
+| `NAZRIA_LLM_PROVIDER` | `gemini` (default) | one of the providers above |
+| `NAZRIA_LLM_MODEL` | `gemini-4-hydrogen` (default for gemini) | model name as the provider knows it |
 | `NAZRIA_LOCAL_STACK` | `vllm` \| `ollama` \| `lmstudio` \| `llamacpp` | local preset (default URL) |
 | `NAZRIA_LLM_BASE_URL` | `http://gpu-box:8000/v1` | overrides the preset / provider URL |
 | `NAZRIA_LLM_API_KEY_ENV` | `OPENAI_API_KEY` | the **name** of the env var that holds the key (defaults per provider) |
