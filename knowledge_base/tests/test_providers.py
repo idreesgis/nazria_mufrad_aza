@@ -284,3 +284,71 @@ def test_engine_default_provider_is_gemini_but_engine_stays_questionnaire(monkey
     pc = EngineConfig.from_env().provider_config()
     pc.validate()
     assert (pc.provider, pc.model, pc.api_key()) == ("gemini", "gemini-3.5-flash", "g-test")
+
+
+# ---- quota handling: pacing, Retry-After, daily quota, thinking-model truncation
+def _gemini_429(text):
+    from google.genai import errors
+    return errors.ClientError(429, {"error": {"code": 429, "message": text, "status": "RESOURCE_EXHAUSTED"}})
+
+
+def test_rate_limit_honours_the_providers_retry_delay():
+    from nazria_kb.providers import _with_retries
+    err = classify_error("gemini", _gemini_429("You exceeded your current quota … Please retry in 37.4s."))
+    assert err.kind == "rate_limit" and err.retryable and err.retry_after == 37.4
+    slept, calls = [], []
+
+    def fn():
+        calls.append(1)
+        if len(calls) == 1:
+            raise _gemini_429("Quota exceeded for GenerateRequestsPerMinutePerProjectPerModel. Please retry in 12s.")
+        return "ok"
+    cfg = ProviderConfig(provider="gemini", model="m", backoff_s=0)
+    assert _with_retries(fn, "gemini", cfg, None, sleep=slept.append) == "ok" and slept == [13.0]
+    cfg.rate_limit_wait_max_s = 5                       # a longer requested wait fails fast instead of hanging
+    calls.clear()
+    with pytest.raises(ProviderError, match="RATE_LIMIT_WAIT_MAX_S"):
+        _with_retries(fn, "gemini", cfg, None, sleep=slept.append)
+
+
+def test_daily_quota_is_not_retried_and_says_what_to_do():
+    err = classify_error("gemini", _gemini_429("Quota exceeded for metric generate_content_free_tier_requests, "
+                                               "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier"))
+    assert err.kind == "quota" and not err.retryable and "billing" in str(err)
+
+
+def test_min_interval_spaces_requests_to_the_same_provider(monkeypatch):
+    from nazria_kb import providers as P
+    monkeypatch.setattr(P, "_LAST_REQUEST", {})
+    clock, slept = [100.0], []
+    now = lambda: clock[0]                                    # noqa: E731
+    P._pace("gemini", 4.0, slept.append, now)                 # first request: no wait
+    clock[0] = 101.5
+    P._pace("gemini", 4.0, slept.append, now)                 # 1.5 s later: wait the remaining 2.5 s
+    P._pace("local", 4.0, slept.append, now)                  # another provider has its own clock
+    assert slept == [2.5]
+    monkeypatch.setenv("NAZRIA_LLM_MIN_INTERVAL_S", "6")
+    assert ProviderConfig(provider="gemini", model="m").min_interval_s == 6.0
+
+
+def test_gemini_answer_cut_off_by_thinking_is_reported(monkeypatch):
+    from types import SimpleNamespace as NS
+    from nazria_kb.providers import GeminiProvider
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    resp = NS(text="عضلاتی قبض اکثر", model_version="gemini-x",
+              usage_metadata=NS(prompt_token_count=900, candidates_token_count=20, thoughts_token_count=780),
+              candidates=[NS(finish_reason=NS(name="MAX_TOKENS"))])
+    client = NS(models=NS(generate_content=lambda **kw: resp))
+    p = GeminiProvider(ProviderConfig(provider="gemini", model="gemini-x", allow_external=True, backoff_s=0),
+                       client=client, sleep=lambda s: None)
+    with pytest.raises(ProviderError) as e:
+        p.complete(MSGS, max_tokens=800, temperature=0.0)
+    assert e.value.kind == "truncated" and "780" in str(e.value) and "NAZRIA_LLM_MAX_TOKENS" in str(e.value)
+    resp.candidates = [NS(finish_reason=NS(name="STOP"))]
+    assert p.complete(MSGS, max_tokens=800, temperature=0.0).text == "عضلاتی قبض اکثر"
+
+
+def test_evaluation_and_judge_use_the_configured_max_tokens(monkeypatch):
+    from nazria_kb.providers import default_max_tokens
+    monkeypatch.setenv("NAZRIA_LLM_MAX_TOKENS", "4096")
+    assert default_max_tokens() == 4096

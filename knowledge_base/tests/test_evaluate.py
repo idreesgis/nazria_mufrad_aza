@@ -61,3 +61,12 @@ def test_judge_failures_are_reported_not_silent(tmp_path, caplog):
     s = summary["good/g1"]
     assert s["judge_errors"] == s["answered_by_llm"] > 0 and s["groundedness_judge"] is None
     assert "judge local/qwen2.5:14b failed" in caplog.text and "not found" in caplog.text
+
+
+def test_evaluation_passes_the_configured_max_tokens_to_answers_and_judge(tmp_path, monkeypatch):
+    """Thinking models spend output tokens on reasoning: a fixed 800/200 cut their answers off."""
+    monkeypatch.setenv("NAZRIA_LLM_MAX_TOKENS", "4096")
+    good = FakeProvider(["عضلاتی قبض شدید ہوتی ہے (جلد دوم، صفحہ 127)۔"], name="good", model="g1")
+    judge = FakeProvider([json.dumps({"groundedness": 4, "fluency": 5})], name="judge", model="j")
+    evaluate([good], R(), tmp_path / "EVAL.md", judge=judge)
+    assert {c["max_tokens"] for c in good.calls} == {4096} and {c["max_tokens"] for c in judge.calls} == {4096}

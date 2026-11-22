@@ -54,6 +54,19 @@ DEFAULT_API_KEY_ENV = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY
 _TRUE = {"1", "true", "yes", "on"}
 
 
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+def default_max_tokens() -> int:
+    """NAZRIA_LLM_MAX_TOKENS (default 1024). Thinking models (Gemini 2.5+/3.x, reasoning models) spend part of this
+    budget on hidden reasoning, so every caller – engines, evaluation, judge, reviewer – uses the configured value."""
+    return int(env_float("NAZRIA_LLM_MAX_TOKENS", 1024))
+
+
 def env_flag(name: str, default: bool = False) -> bool:
     v = os.environ.get(name)
     return default if v is None else v.strip().lower() in _TRUE
@@ -72,11 +85,12 @@ class Completion:
 
 class ProviderError(RuntimeError):
     """Any provider failure. ``kind``: config | policy | sdk_missing | auth | not_found | bad_request |
-    rate_limit | timeout | connection | server | empty | unknown."""
+    rate_limit | quota | timeout | connection | server | empty | truncated | unknown."""
 
-    def __init__(self, provider: str, kind: str, message: str, retryable: bool = False):
+    def __init__(self, provider: str, kind: str, message: str, retryable: bool = False,
+                 retry_after: float | None = None):
         super().__init__(f"[{provider}] {kind}: {message}")
-        self.provider, self.kind, self.retryable = provider, kind, retryable
+        self.provider, self.kind, self.retryable, self.retry_after = provider, kind, retryable, retry_after
 
 
 class LLMProvider(Protocol):
@@ -102,6 +116,10 @@ class ProviderConfig:
     backoff_s: float = 1.0
     backoff_max_s: float = 20.0
     allow_external: bool = False
+    # minimum seconds between two requests to the same provider (answers and judge share one quota)
+    min_interval_s: float = field(default_factory=lambda: env_float("NAZRIA_LLM_MIN_INTERVAL_S", 0.0))
+    # longest wait honoured when a 429 says "retry in N s"; a longer requested wait fails the request instead
+    rate_limit_wait_max_s: float = field(default_factory=lambda: env_float("NAZRIA_LLM_RATE_LIMIT_WAIT_MAX_S", 90.0))
 
     @classmethod
     def from_env(cls, provider: str | None = None, model: str | None = None) -> "ProviderConfig":
@@ -174,6 +192,9 @@ def strip_reasoning(text: str | None) -> str:
 
 
 # --------------------------------------------------------------------------- errors and retries
+# Gemini: "Please retry in 37.4s" / RetryInfo 'retryDelay': '37s'; quota ids such as ...PerDayPerProjectPerModel...
+_RETRY_AFTER_RE = re.compile(r"retry in ([0-9]+(?:\.[0-9]+)?)\s*s|retryDelay'?\"?\s*:\s*'?\"?([0-9]+(?:\.[0-9]+)?)s", re.I)
+_DAILY_QUOTA_RE = re.compile(r"PerDay", re.I)
 _INVALID_KEY_RE = re.compile(r"API_KEY_INVALID|API key not valid|invalid[ _]api[ _]key|incorrect api key", re.I)
 
 
@@ -182,9 +203,10 @@ def classify_error(provider: str, exc: BaseException, secret: str | None = None)
     if isinstance(exc, ProviderError):
         return exc
     names = {c.__name__ for c in type(exc).__mro__}
-    msg = str(exc).strip().splitlines()[0][:300] if str(exc).strip() else type(exc).__name__
+    full = str(exc)
+    msg = full.strip().splitlines()[0][:300] if full.strip() else type(exc).__name__
     if secret:
-        msg = msg.replace(secret, "<key>")
+        msg, full = msg.replace(secret, "<key>"), full.replace(secret, "<key>")
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int):
         status = getattr(exc, "code", None) if isinstance(getattr(exc, "code", None), int) else None
@@ -196,8 +218,14 @@ def classify_error(provider: str, exc: BaseException, secret: str | None = None)
                                                    f"variable and the account's access ({msg})")
         if status == 404:
             return ProviderError(provider, "not_found", f"HTTP 404 – check NAZRIA_LLM_MODEL and the base URL ({msg})")
+        if status == 429 and _DAILY_QUOTA_RE.search(full):
+            return ProviderError(provider, "quota", "HTTP 429: the daily request quota of this key's project is used up "
+                                                    "– wait for the daily reset or enable billing for the project "
+                                                    f"({msg})")
         if status in (408, 409, 425, 429):
-            return ProviderError(provider, "rate_limit", f"HTTP {status}: rate limited or busy ({msg})", True)
+            m = _RETRY_AFTER_RE.search(full)
+            return ProviderError(provider, "rate_limit", f"HTTP {status}: rate limited or busy ({msg})", True,
+                                 retry_after=float(m.group(1) or m.group(2)) if m else None)
         if status >= 500:
             return ProviderError(provider, "server", f"HTTP {status}: provider server error ({msg})", True)
         if _INVALID_KEY_RE.search(msg):     # Gemini answers an invalid key with 400 API_KEY_INVALID
@@ -221,6 +249,12 @@ def _with_retries(fn: Callable[[], Completion], provider: str, cfg: ProviderConf
             if not err.retryable or attempt >= cfg.max_retries:
                 raise err from None
             delay = min(cfg.backoff_max_s, cfg.backoff_s * (2 ** attempt)) * (0.5 + random.random() / 2)
+            if err.retry_after:
+                if err.retry_after > cfg.rate_limit_wait_max_s:
+                    raise ProviderError(provider, "rate_limit", f"the provider asks to wait {err.retry_after:.0f}s, longer "
+                                        f"than NAZRIA_LLM_RATE_LIMIT_WAIT_MAX_S={cfg.rate_limit_wait_max_s:.0f}s "
+                                        f"({err})") from None
+                delay = max(delay, err.retry_after + 1)
             log.warning("%s (attempt %d/%d), retrying in %.1fs", err, attempt + 1, cfg.max_retries + 1, delay)
             sleep(delay)
             attempt += 1
@@ -243,6 +277,20 @@ def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
     return system, turns
 
 
+# --------------------------------------------------------------------------- pacing
+_LAST_REQUEST: dict[str, float] = {}      # provider id -> monotonic time of the last request (process-wide)
+
+
+def _pace(provider: str, interval: float, sleep: Callable[[float], None], now: Callable[[], float] = time.monotonic):
+    """Wait so that two requests to the same provider start at least ``interval`` seconds apart."""
+    if interval > 0:
+        wait = _LAST_REQUEST.get(provider, float("-inf")) + interval - now()
+        if wait > 0:
+            log.info("[%s] waiting %.1fs between requests (NAZRIA_LLM_MIN_INTERVAL_S)", provider, wait)
+            sleep(wait)
+    _LAST_REQUEST[provider] = now()
+
+
 # --------------------------------------------------------------------------- adapters
 class _Base:
     name = ""
@@ -262,6 +310,7 @@ class _Base:
 
     def complete(self, messages: list[dict], *, max_tokens: int, temperature: float | None) -> Completion:
         def call() -> Completion:
+            _pace(self.name, self.cfg.min_interval_s, self._sleep)
             t0 = time.perf_counter()
             text, model, pt, ct = self._once(messages, max_tokens, temperature)
             text = strip_reasoning(text)
@@ -277,6 +326,7 @@ class _Base:
         attempt = 0
         while True:
             started = False
+            _pace(self.name, self.cfg.min_interval_s, self._sleep)
             try:
                 for delta in self._stream_once(messages, max_tokens, temperature):
                     started = True
@@ -384,6 +434,15 @@ class GeminiProvider(_Base):
     def _once(self, messages, max_tokens, temperature):
         r = self.client.models.generate_content(**self._request(messages, max_tokens, temperature))
         u = r.usage_metadata
+        thoughts = getattr(u, "thoughts_token_count", None)
+        finish = getattr((r.candidates or [None])[0], "finish_reason", None)
+        log.debug("gemini %s: finish=%s, answer tokens=%s, thinking tokens=%s, max_output_tokens=%s",
+                  getattr(r, "model_version", None) or self.model, getattr(finish, "name", finish),
+                  getattr(u, "candidates_token_count", None), thoughts, max_tokens)
+        if getattr(finish, "name", str(finish)) == "MAX_TOKENS":
+            raise ProviderError(self.name, "truncated",
+                                f"the answer was cut off at max_output_tokens={max_tokens} ({thoughts or 0} of them "
+                                f"spent on thinking) – raise NAZRIA_LLM_MAX_TOKENS, e.g. to 4096")
         return (r.text or ""), getattr(r, "model_version", None), getattr(u, "prompt_token_count", None), \
             getattr(u, "candidates_token_count", None)
 
