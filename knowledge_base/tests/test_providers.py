@@ -233,6 +233,16 @@ def test_gemini_client_error_classified(monkeypatch):
     assert err.kind == "rate_limit" and err.retryable
     err = classify_error("gemini", errors.ClientError(403, {"error": {"message": "denied"}}))
     assert err.kind == "auth"
+    bad_key = errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                 "status": "INVALID_ARGUMENT"}})
+    err = classify_error("gemini", bad_key)
+    assert err.kind == "auth" and not err.retryable and "API key not valid" in str(err)
+
+
+@pytest.mark.parametrize("raw", ['"g-abc"', "'g-abc'", "  g-abc \n", '" g-abc "'])
+def test_api_key_whitespace_and_quotes_are_stripped(monkeypatch, raw):
+    monkeypatch.setenv("GEMINI_API_KEY", raw)
+    assert ProviderConfig(provider="gemini", model="m").api_key() == "g-abc"
 
 
 def test_reasoning_blocks_are_removed_before_the_patient_sees_them():

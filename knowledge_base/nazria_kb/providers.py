@@ -144,7 +144,9 @@ class ProviderConfig:
 
     def api_key(self) -> str | None:
         name = self.key_env()
-        key = os.environ.get(name) if name else None
+        key = (os.environ.get(name) or "").strip() if name else ""
+        if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+            key = key[1:-1].strip()          # GEMINI_API_KEY="..." loaded verbatim by some .env loaders
         if not key and self.provider != "local":
             raise ProviderError(self.provider, "config", f"API key not found: set the environment variable {name} "
                                                          f"(or point NAZRIA_LLM_API_KEY_ENV at the variable that holds it)")
@@ -165,6 +167,9 @@ def strip_reasoning(text: str | None) -> str:
 
 
 # --------------------------------------------------------------------------- errors and retries
+_INVALID_KEY_RE = re.compile(r"API_KEY_INVALID|API key not valid|invalid[ _]api[ _]key|incorrect api key", re.I)
+
+
 def classify_error(provider: str, exc: BaseException, secret: str | None = None) -> ProviderError:
     """Map SDK / transport exceptions of any provider to a ProviderError (duck-typed, no SDK imports)."""
     if isinstance(exc, ProviderError):
@@ -188,6 +193,9 @@ def classify_error(provider: str, exc: BaseException, secret: str | None = None)
             return ProviderError(provider, "rate_limit", f"HTTP {status}: rate limited or busy ({msg})", True)
         if status >= 500:
             return ProviderError(provider, "server", f"HTTP {status}: provider server error ({msg})", True)
+        if _INVALID_KEY_RE.search(msg):     # Gemini answers an invalid key with 400 API_KEY_INVALID
+            return ProviderError(provider, "auth", f"HTTP {status}: API key not valid – check the API key "
+                                                   f"variable and that the key is for this provider ({msg})")
         return ProviderError(provider, "bad_request", f"HTTP {status}: request rejected ({msg})")
     if any("Connect" in n or "Transport" in n or "NetworkError" in n for n in names) or isinstance(exc, OSError):
         return ProviderError(provider, "connection", f"cannot reach the provider – is the server running and the "

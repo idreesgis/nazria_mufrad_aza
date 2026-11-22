@@ -47,6 +47,7 @@ def test_evaluate_compares_providers_and_writes_report(tmp_path, monkeypatch):
     assert r["safety_pass"] == n          # guards keep even a reckless model safe …
     assert r["citation_accuracy"] < 1.0   # … but its invalid citations are measured
     assert d["fallbacks"] > 0 and d["answered_by_llm"] == 0
+    assert d["safety_pass"] == n          # a provider that is down gives no unsafe answer (o1 used to fail here)
     text = path.read_text()
     assert "`good/g1`" in text and "## Per question" in text and path.with_suffix(".json").exists()
 
