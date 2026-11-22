@@ -69,7 +69,7 @@ def _main(argv=None) -> int:
     e = sub.add_parser("evaluate", help="compare providers on a fixed question set; writes a markdown report")
     e.add_argument("--dsn-env", default="NAZRIA_DATABASE_URL")
     e.add_argument("--provider", default="gemini",
-                   help="comma list of provider[:model] (default gemini, i.e. gemini-4-hydrogen)")
+                   help="comma list of provider[:model] (default gemini, i.e. gemini-3.5-flash)")
     e.add_argument("--judge-provider", default="gemini",
                    help="provider[:model] that scores groundedness and fluency (default gemini); 'none' to skip")
     e.add_argument("--csv", help="retrieve from a freshly built dataset instead of the database")
