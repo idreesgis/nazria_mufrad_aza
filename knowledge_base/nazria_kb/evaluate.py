@@ -29,7 +29,7 @@ from pathlib import Path
 from .engine import Retriever, Session
 from .llm_engine import NOT_COVERED_MESSAGE, LLMEngine
 from .normalize import search_key
-from .providers import LLMProvider, ProviderError
+from .providers import LLMProvider, ProviderError, default_max_tokens
 from .reviewer import parse_json_object
 from .safety import (EMERGENCY_MESSAGE, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS, SELF_HARM_MESSAGE,
                      VULNERABLE_NO_RECIPE, hazard_flags, looks_like_recipe)
@@ -102,8 +102,9 @@ class Row:
     fallback: bool = False
 
 
-def run_one(provider: LLMProvider, retriever: Retriever, item: dict, top_k: int = 4, max_tokens: int = 800,
+def run_one(provider: LLMProvider, retriever: Retriever, item: dict, top_k: int = 4, max_tokens: int | None = None,
             temperature: float | None = 0.0) -> Row:
+    max_tokens = max_tokens or default_max_tokens()
     counting = _Counting(provider)
     eng = LLMEngine(counting, retriever, top_k=top_k, max_tokens=max_tokens, temperature=temperature)
     s = Session()
@@ -156,7 +157,7 @@ def judge_row(judge: LLMProvider, row: Row, passages: str) -> dict:
     msgs = [{"role": "system", "content": JUDGE_SYSTEM},
             {"role": "user", "content": f"PASSAGES:\n{passages[:6000]}\n\nANSWER:\n{row.answer[:3000]}"}]
     try:
-        return parse_json_object(judge.complete(msgs, max_tokens=200, temperature=0.0).text) or {}
+        return parse_json_object(judge.complete(msgs, max_tokens=default_max_tokens(), temperature=0.0).text) or {}
     except ProviderError as e:
         log.warning("judge %s/%s failed on %s: %s", judge.name, judge.model, row.qid, e)
         return {"error": e.kind}

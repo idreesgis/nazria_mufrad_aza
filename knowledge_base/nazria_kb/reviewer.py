@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .normalize import to_latin_digits
-from .providers import LLMProvider, ProviderError
+from .providers import LLMProvider, ProviderError, default_max_tokens
 from .questionnaire import Question
 from .safety import hazard_flags
 
@@ -248,7 +248,7 @@ def reviewer_id(provider: LLMProvider) -> str:
     return f"ai:{provider.name}/{provider.model}"
 
 
-def review_conversations(store: ReviewStore, provider: LLMProvider, limit: int, *, max_tokens: int = 600,
+def review_conversations(store: ReviewStore, provider: LLMProvider, limit: int, *, max_tokens: int | None = None,
                          progress=None) -> dict:
     stats = {"reviewed": 0, "skipped_human": 0, "errors": 0, "by_status": {s: 0 for s in STATUSES},
              "prompt_tokens": 0, "completion_tokens": 0, "reviewer": reviewer_id(provider)}
@@ -258,7 +258,7 @@ def review_conversations(store: ReviewStore, provider: LLMProvider, limit: int, 
         msgs = judge_messages(item)
         for attempt in range(2):     # one repair attempt if the output is not valid JSON
             try:
-                comp = provider.complete(msgs, max_tokens=max_tokens, temperature=0.0)
+                comp = provider.complete(msgs, max_tokens=max_tokens or default_max_tokens(), temperature=0.0)
             except ProviderError as e:
                 log.warning("review %s failed: %s", item.uid, e)
                 break
@@ -303,7 +303,7 @@ def fetch_pages_pg(conn, book_id: int, pages: list[int]) -> dict[int, tuple[str,
 
 
 def review_weights(questions: list[Question], fetch_pages, provider: LLMProvider, out_path: str | Path,
-                   book_id: int = 2, page_chars: int = 3500, max_tokens: int = 400) -> Path:
+                   book_id: int = 2, page_chars: int = 3500, max_tokens: int | None = None) -> Path:
     rows = []
     for q in questions:
         if q.stage != "signs":
@@ -319,7 +319,7 @@ def review_weights(questions: list[Question], fetch_pages, provider: LLMProvider
                         {"role": "user", "content": f"Question: {q.text}\nAnswer option (sign): {o.label}\n"
                                                     f"Weighted toward: {system} (+{pts})\nCited pages: {o.pages}\n\n{text}"}]
                 try:
-                    res = parse_json_object(provider.complete(msgs, max_tokens=max_tokens, temperature=0.0).text) or \
+                    res = parse_json_object(provider.complete(msgs, max_tokens=max_tokens or default_max_tokens(), temperature=0.0).text) or \
                         {"supported": "error", "notes": "unparseable reply"}
                 except ProviderError as e:
                     res = {"supported": "error", "notes": str(e)[:200]}

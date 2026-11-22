@@ -98,6 +98,8 @@ fix (variable, base URL, model) and never contains the key. The current SDKs use
 | `NAZRIA_ALLOW_EXTERNAL_PROVIDERS` | `false` (default) | must be `true` for openai, deepseek, anthropic, gemini |
 | `NAZRIA_LLM_TEMPERATURE` / `NAZRIA_LLM_MAX_TOKENS` | `0.2` / `1024` | generation limits |
 | `NAZRIA_LLM_TIMEOUT_S` / `NAZRIA_LLM_MAX_RETRIES` | `60` / `3` | per-request timeout, retries after the first attempt |
+| `NAZRIA_LLM_MIN_INTERVAL_S` | `0` (e.g. `6` for a free-tier key) | minimum gap between two requests to the same provider; answers and judge share it |
+| `NAZRIA_LLM_RATE_LIMIT_WAIT_MAX_S` | `90` | a 429 that asks to "retry in N s" is waited out up to this long; a daily-quota 429 is not retried |
 | `NAZRIA_RAG_TOP_K` | `4` | passages retrieved per turn |
 | `NAZRIA_TRAINING_REVIEW_MODE` | `human_or_ai` (now) \| `human_only` (later) | default of `export-training` |
 
