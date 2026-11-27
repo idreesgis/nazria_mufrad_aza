@@ -157,6 +157,9 @@ NAZRIA_API_DOCS = env_flag("NAZRIA_API_DOCS", DEBUG)
 NAZRIA_ADMIN = env_flag("NAZRIA_ADMIN", True)
 
 # ---------------------------------------------------------------- patients and pulse videos
+# Google sign-in: the OAuth client ID(s) the app's ID tokens are issued for (the "Web application" client ID the
+# Android app passes as serverClientId), comma-separated. Empty = Google sign-in off. Not a secret.
+NAZRIA_GOOGLE_CLIENT_IDS = [c.strip() for c in (env("NAZRIA_GOOGLE_CLIENT_IDS") or "").split(",") if c.strip()]
 NAZRIA_DEFAULT_COUNTRY_CODE = env("NAZRIA_DEFAULT_COUNTRY_CODE") or "92"     # 03001234567 -> +923001234567
 MEDIA_ROOT = Path(env("NAZRIA_MEDIA_ROOT") or BASE_DIR / "media")          # pulse videos (never served publicly)
 NAZRIA_PULSE_MAX_MB = int(env("NAZRIA_PULSE_MAX_MB") or 100)

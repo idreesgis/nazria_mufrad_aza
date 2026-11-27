@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.views import exception_handler as drf_exception_handler
 
+from accounts import google as google_login
 from accounts.models import is_staff_user
 from accounts.permissions import HasAppKey
 from accounts.throttles import ExplanationRateThrottle, UserRateThrottle
@@ -72,7 +73,8 @@ class HealthView(APIView):
             log.error("health check: database %s", type(e).__name__)
             db = "unavailable"
         body = {"status": "ok" if db == "ok" else "degraded", "database": db,
-                "explanation_enabled": services.explanation_enabled(), "api_version": services.API_VERSION}
+                "explanation_enabled": services.explanation_enabled(), "google_login_enabled": google_login.enabled(),
+                "api_version": services.API_VERSION}
         return Response(body, status=200 if db == "ok" else 503)
 
 
