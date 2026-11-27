@@ -64,28 +64,30 @@ EMERGENCY_MESSAGE = (
 SELF_HARM_MESSAGE = (
     "آپ اکیلے نہیں ہیں۔ براہ کرم ابھی کسی قریبی عزیز سے بات کریں اور فوراً قریبی ہسپتال یا ہنگامی سروس سے رابطہ کریں۔"
 )
+# Patient-facing texts name no book, author, page or "حکیم": the patient is referred to a qualified practitioner
+# (مستند معالج). Book volume/page references stay in the question bank for review tools only.
 DISCLAIMER = (
-    "یہ سوالنامہ کتاب «کلیات تحقیقات صابر ملتانی» کی بنیاد پر صرف رہنمائی کے لیے ہے، یہ تشخیص نہیں ہے۔ "
-    "حتمی تشخیص اور علاج کے لیے کسی مستند حکیم سے نبض اور قارورہ کا معائنہ ضرور کروائیں۔"
+    "یہ نتیجہ نظریہ مفرد اعضاء کے مطابق آپ کی بتائی ہوئی علامات کی بنیاد پر صرف رہنمائی کے لیے ہے، یہ تشخیص نہیں ہے۔ "
+    "حتمی تشخیص اور علاج کے لیے کسی مستند معالج سے نبض اور قارورہ کا معائنہ ضرور کروائیں۔"
 )
 BOOK_DISCLAIMER_LLM = (
-    "یہ جواب کتاب «کلیات تحقیقات صابر ملتانی» کے اقتباسات کی بنیاد پر صرف رہنمائی کے لیے ہے، یہ تشخیص نہیں ہے۔ "
-    "حتمی تشخیص اور علاج کے لیے کسی مستند حکیم سے نبض اور قارورہ کا معائنہ ضرور کروائیں۔"
+    "یہ وضاحت نظریہ مفرد اعضاء کی روشنی میں صرف رہنمائی کے لیے ہے، یہ تشخیص نہیں ہے۔ "
+    "حتمی تشخیص اور علاج کے لیے کسی مستند معالج سے نبض اور قارورہ کا معائنہ ضرور کروائیں۔"
 )
 PRACTITIONER_ONLY = (
-    "اس مرض کے لیے کتاب میں جو نسخہ درج ہے اس میں ایسے اجزاء ({items}) شامل ہیں جو غلط مقدار میں زہریلے "
-    "ہو سکتے ہیں، اس لیے یہ نسخہ یہاں نہیں دکھایا جا رہا۔ یہ صرف مستند حکیم کی نگرانی میں استعمال ہو سکتا ہے۔"
+    "اس تکلیف کے نسخے میں ایسے اجزاء ({items}) شامل ہیں جو غلط مقدار میں زہریلے "
+    "ہو سکتے ہیں، اس لیے یہ نسخہ یہاں نہیں دکھایا جا رہا۔ یہ صرف مستند معالج کی نگرانی میں استعمال ہو سکتا ہے۔"
 )
 VULNERABLE_NO_RECIPE = (
     "بچوں، حاملہ یا دودھ پلانے والی خواتین اور بزرگوں کے لیے یہاں کوئی نسخہ تجویز نہیں کیا جاتا۔ "
-    "براہ کرم براہ راست کسی مستند حکیم یا ڈاکٹر سے رجوع کریں۔"
+    "براہ کرم براہ راست کسی مستند معالج یا ڈاکٹر سے رجوع کریں۔"
 )
 # Patient health conditions (from the patient's general info) for which no book recipe is shown: herbal recipes can
-# harm a weak kidney, liver or heart, or interact with the medicines these patients take. For a Hakeem to review.
+# harm a weak kidney, liver or heart, or interact with the medicines these patients take. For a practitioner to review.
 RECIPE_RISK_CONDITIONS = frozenset({"kidney", "liver", "heart"})
 CONDITION_NO_RECIPE = (
     "مریض کو پہلے سے گردے، جگر یا دل کی بیماری ہے، اس لیے یہاں کوئی نسخہ تجویز نہیں کیا جاتا۔ "
-    "براہ کرم اپنے معالج یا کسی مستند حکیم سے براہ راست رجوع کریں۔"
+    "براہ کرم اپنے معالج سے براہ راست رجوع کریں۔"
 )
 MEDICATION_ADVICE = (
     "مریض پہلے سے دوائیں لے رہا ہے، یا اسے کسی چیز سے الرجی ہے: کوئی بھی دیسی نسخہ شروع کرنے سے پہلے "
@@ -176,3 +178,28 @@ def guard_answer(text: str, vulnerable: bool) -> tuple[str, dict]:
         kept.append(VULNERABLE_NO_RECIPE)
     return "\n".join(kept), {"hazards": sorted(hazards), "removed_paragraphs": removed,
                              "vulnerable_recipe_removed": vuln_removed}
+
+
+# --------------------------------------------------------------------------- no references in patient text
+_NUMS = r"[0-9۰-۹]+(?:\s*[،,\-–]\s*[0-9۰-۹]+)*"
+_REF_PATTERNS = [
+    re.compile(r"\s*\(\s*جلد\s*(?:اول|دوم|[12۱۲])[^)]*\)"),                    # (جلد دوم، صفحہ 127)
+    re.compile(r"\s*جلد\s*(?:اول|دوم|[12۱۲])\s*[،,]?\s*(?:صفحہ|صفحات|ص)\s*" + _NUMS),
+    re.compile(r"\s*\(?\s*صفح(?:ہ|ات)\s*" + _NUMS + r"\)?"),
+    re.compile(r"\s*\[[0-9۰-۹]{1,2}\]"),                                           # [2] passage markers
+    re.compile(r"کتاب\s*«?کلیات تحقیقات صابر ملتانی»?\s*(?:کے مطابق|میں)?[،,]?\s*"),
+    re.compile(r"(?:حکیم\s*)?(?:دوست محمد\s*)?صابر ملتانی(?:\s*مرحوم)?"),
+    re.compile(r"کتاب\s*(?:کے مطابق|میں)\s*[،,]?\s*"),
+]
+
+
+def strip_references(text: str | None) -> str | None:
+    """Patient text without book names, author, volume/page references or passage markers."""
+    if not text:
+        return text
+    for rx in _REF_PATTERNS:
+        text = rx.sub("", text)
+    text = re.sub(r"(?<![\n])[ \t]{2,}", " ", text)
+    text = re.sub(r"\s+([۔،])", r"\1", text)
+    text = re.sub(r"\bمستند حکیم\b|\bحکیم صاحب\b", "مستند معالج", text)
+    return text.strip()

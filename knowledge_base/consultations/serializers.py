@@ -72,13 +72,6 @@ class TriageOut(serializers.Serializer):
     message = serializers.CharField(allow_null=True, help_text="Show this and stop when emergency is true")
 
 
-class CitationOut(serializers.Serializer):
-    volume = serializers.IntegerField()
-    volume_name = serializers.CharField()
-    pages = serializers.ListField(child=serializers.IntegerField())
-    text = serializers.CharField(help_text='Ready-made Urdu reference, e.g. "جلد دوم، صفحہ 127"')
-
-
 class EmergencyOut(serializers.Serializer):
     flags = serializers.ListField(child=serializers.CharField())
     flag_labels = serializers.ListField(child=serializers.CharField())
@@ -90,8 +83,7 @@ class EvidenceOut(serializers.Serializer):
     option_key = serializers.CharField()
     question = serializers.CharField()
     answer = serializers.CharField()
-    system = serializers.CharField()
-    citation = CitationOut()
+    system = serializers.CharField(help_text="The system this symptom points to: اعصابی | عضلاتی | غدی")
 
 
 class AssessmentOut(serializers.Serializer):
@@ -123,13 +115,11 @@ class RecipeOut(serializers.Serializer):
 class TopicOut(serializers.Serializer):
     id = serializers.IntegerField()
     title = serializers.CharField()
-    citation = CitationOut()
 
 
 class PassageOut(serializers.Serializer):
-    context = serializers.CharField()
+    title = serializers.CharField()
     excerpt = serializers.CharField()
-    citation = CitationOut()
 
 
 class BookOut(serializers.Serializer):
@@ -137,18 +127,33 @@ class BookOut(serializers.Serializer):
     description = serializers.CharField(allow_null=True)
     recipe = RecipeOut(allow_null=True)
     diet = serializers.CharField(allow_null=True)
-    passages = PassageOut(many=True, help_text="Only when no chapter matched the complaint")
+    passages = PassageOut(many=True, help_text="Only when no topic matched the complaint")
 
 
-class SourceOut(serializers.Serializer):
-    context = serializers.CharField()
-    citation = CitationOut()
+class QehwaOut(serializers.Serializer):
+    name = serializers.CharField()
+    ingredients = serializers.ListField(child=serializers.CharField())
+    how = serializers.CharField(help_text="How to prepare it")
+
+
+class DietPlanOut(serializers.Serializer):
+    tehreek = serializers.CharField(help_text="The tehreek this plan is for")
+    mizaj = serializers.CharField()
+    choose_if = serializers.CharField(allow_null=True, help_text="Only when two plans are given (the tehreek is not "
+                                      "certain): the feeling that tells the patient which plan applies")
+    breakfast = serializers.ListField(child=serializers.CharField())
+    lunch = serializers.ListField(child=serializers.CharField())
+    dinner = serializers.ListField(child=serializers.CharField())
+    fruits = serializers.ListField(child=serializers.CharField(), help_text="Empty: fruits are not advised")
+    dry_fruits = serializers.ListField(child=serializers.CharField(), help_text="Empty: dry fruits are not advised")
+    qehwa = QehwaOut()
+    rules = serializers.ListField(child=serializers.CharField())
+    notes = serializers.ListField(child=serializers.CharField(), help_text="From the patient's info (diabetes …)")
 
 
 class ExplanationOut(serializers.Serializer):
     status = serializers.ChoiceField(choices=["shown", "not_covered", "rejected", "unavailable", "disabled"])
     text = serializers.CharField(required=False, help_text="Only when status is shown")
-    sources = SourceOut(many=True, required=False)
     reason = serializers.CharField(required=False)
     retryable = serializers.BooleanField(required=False)
     provider = serializers.CharField(required=False)
@@ -197,6 +202,8 @@ class ConsultationOut(serializers.Serializer):
     emergency = EmergencyOut(allow_null=True)
     assessment = AssessmentOut(allow_null=True)
     book = BookOut(allow_null=True)
+    diet_plans = DietPlanOut(many=True, help_text="One plan for the tehreek found; two (with choose_if) when only the "
+                             "dominant system is known; empty for an emergency or an inconclusive result")
     advice = serializers.ListField(child=serializers.CharField())
     disclaimer = serializers.CharField()
     text = serializers.CharField(help_text="The whole result as Urdu text (same as the CLI), for simple display")
