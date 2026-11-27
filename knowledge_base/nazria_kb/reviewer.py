@@ -310,14 +310,14 @@ def review_weights(questions: list[Question], fetch_pages, provider: LLMProvider
             continue
         for o in q.options:
             for system, pts in o.weights.items():
-                pages = fetch_pages(book_id, o.pages)
+                pages = fetch_pages(o.volume or book_id, o.pages)
                 text = "\n\n".join(f"--- {lbl} ---\n{t[:page_chars]}" for lbl, t in pages.values())
                 if not text:
                     rows.append((q, o, system, pts, {"supported": "not_found", "notes": "cited pages not in the DB"}))
                     continue
                 msgs = [{"role": "system", "content": WEIGHTS_SYSTEM},
                         {"role": "user", "content": f"Question: {q.text}\nAnswer option (sign): {o.label}\n"
-                                                    f"Weighted toward: {system} (+{pts})\nCited pages: {o.pages}\n\n{text}"}]
+                                                    f"Weighted toward: {system} (+{pts})\nCited pages (volume {o.volume}): {o.pages}\n\n{text}"}]
                 try:
                     res = parse_json_object(provider.complete(msgs, max_tokens=max_tokens or default_max_tokens(), temperature=0.0).text) or \
                         {"supported": "error", "notes": "unparseable reply"}
@@ -339,7 +339,7 @@ def review_weights(questions: list[Question], fetch_pages, provider: LLMProvider
         flagged += sup not in ("yes",)
         mismatch = r.get("system_in_text") and r.get("system_in_text") != system
         cell = (r.get("quote") or "") + (" — " if r.get("quote") and r.get("notes") else "") + (r.get("notes") or "")
-        lines.append(f"| `{q.id}` | {o.label} | {system} +{pts} | {', '.join(map(str, o.pages))} | "
+        lines.append(f"| `{q.id}` | {o.label} | {system} +{pts} | vol {o.volume}: {', '.join(map(str, o.pages))} | "
                      f"{'⚠️ ' if sup != 'yes' or mismatch else ''}{sup} | {r.get('system_in_text') or '—'} | "
                      f"{cell.replace('|', '/').replace(chr(10), ' ')} |")
     lines += ["", f"{len(rows)} weighted links checked; **{flagged} need a Hakeem's attention** (not 'yes')."]

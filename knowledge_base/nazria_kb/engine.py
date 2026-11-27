@@ -371,9 +371,10 @@ def render_assessment(a: Assessment) -> str:
         if sc.tehreek:
             lines.append(f"• اندازاً تحریک: «{sc.tehreek}» — مزاج: {TEHREEK_MIZAJ[sc.tehreek]}")
         lines.append("• یہ نتیجہ ان علامات سے اخذ کیا گیا:")
-        for qtext, label, system, pages in sc.evidence:
+        vols = sc.evidence_volumes or [2] * len(sc.evidence)
+        for (qtext, label, system, pages), vol in zip(sc.evidence, vols):
             shown = f"{qtext.rstrip('؟?')}: {label}" if label in ("ہاں", "نہیں") else label
-            lines.append(f"   - {shown} → {system} ({_pages_list(2, pages)})")
+            lines.append(f"   - {shown} → {system} ({_pages_list(vol, pages)})")
     else:
         lines.append("• آپ کے جوابات سے کوئی واضح تحریک ظاہر نہیں ہوتی۔ نبض اور قارورہ کا براہ راست معائنہ ضروری ہے۔")
     if a.topic:
