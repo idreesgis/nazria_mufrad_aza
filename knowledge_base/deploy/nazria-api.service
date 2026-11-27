@@ -1,0 +1,36 @@
+# /etc/systemd/system/nazria-api.service
+# The Nazria REST API (Django + gunicorn) behind nginx. Install: see deploy/DEPLOY_UBUNTU.md
+[Unit]
+Description=Nazria Mufrad Aza REST API (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=nazria
+Group=nazria
+WorkingDirectory=/opt/nazria/app/knowledge_base
+EnvironmentFile=/etc/nazria/nazria.env
+# gunicorn listens on a Unix socket that only nginx (group www-data) can reach
+RuntimeDirectory=nazria
+RuntimeDirectoryMode=0750
+ExecStart=/opt/nazria/venv/bin/gunicorn nazria_api.wsgi \
+    --bind unix:/run/nazria/gunicorn.sock --umask 007 \
+    --workers 3 --timeout 180 --graceful-timeout 30 \
+    --access-logfile - --error-logfile -
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# hardening: read-only system, writable only where the API stores data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nazria
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
