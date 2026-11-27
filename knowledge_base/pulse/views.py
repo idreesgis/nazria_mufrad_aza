@@ -1,8 +1,11 @@
 """Pulse video upload and analysis (moved here from the former pulse_diagnosis project)."""
 from __future__ import annotations
 
+import uuid
+
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -41,11 +44,12 @@ def visible(request):
     """Analyses the caller may see: their own (not deleted); staff see all, deleted included."""
     if is_staff_user(request.user):
         return PulseAnalysis.objects.all()
-    return PulseAnalysis.objects.filter(patient=request.user, deleted_at__isnull=True)
+    return PulseAnalysis.objects.filter(account=request.user, deleted_at__isnull=True)
 
 
 class PulseListCreateView(generics.ListAPIView):
-    """GET: your pulse analyses, newest first. POST (multipart): upload a video and analyse it (takes seconds)."""
+    """GET: the account's pulse analyses, newest first (?patient=<id> for one patient). POST (multipart): upload a
+    patient's video and analyse it (takes seconds)."""
     serializer_class = PulseAnalysisOut
     parser_classes = [MultiPartParser, FormParser]
 
@@ -53,7 +57,18 @@ class PulseListCreateView(generics.ListAPIView):
         return [PulseRateThrottle(), UserRateThrottle()] if self.request.method == "POST" else super().get_throttles()
 
     def get_queryset(self):
-        return visible(self.request).filter(patient=self.request.user)
+        qs = visible(self.request).filter(account=self.request.user)
+        pid = self.request.query_params.get("patient")
+        if pid:
+            try:
+                qs = qs.filter(patient_id=uuid.UUID(pid))
+            except ValueError:
+                qs = qs.none()
+        return qs
+
+    @extend_schema(parameters=[OpenApiParameter("patient", OpenApiTypes.UUID, description="only this patient")])
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.get_queryset())
@@ -64,20 +79,33 @@ class PulseListCreateView(generics.ListAPIView):
         data = PulseUploadIn(data=request.data)
         data.is_valid(raise_exception=True)
         d = data.validated_data
-        consultation = None
+        from patients.views import patient_for
+        consultation, patient = None, None
         if d.get("consultation"):
-            consultation = Consultation.objects.filter(session_uid=d["consultation"], patient=request.user,
+            consultation = Consultation.objects.filter(session_uid=d["consultation"], account=request.user,
                                                        deleted_at__isnull=True).first()
             if consultation is None:
                 return Response({"error": "invalid_request", "detail": "no such consultation",
                                  "fields": {"consultation": "not one of your consultations"}}, status=400)
-        a = PulseAnalysis(patient=request.user, consultation=consultation, method=d["method"],
+            patient = consultation.patient
+        if d.get("patient"):
+            chosen = patient_for(request, d["patient"], include_deleted_for_staff=False)
+            if chosen is None or (patient is not None and chosen.pk != patient.pk):
+                return Response({"error": "invalid_request", "detail": "no such patient",
+                                 "fields": {"patient": "not one of your patients, or not the consultation's"}},
+                                status=400)
+            patient = chosen
+        if patient is None:
+            return Response({"error": "patient_required", "detail": "choose the patient of this pulse video",
+                             "fields": {"patient": "required"}}, status=400)
+        a = PulseAnalysis(account=patient.account, patient=patient, consultation=consultation, method=d["method"],
                           symptoms=d.get("symptoms") or [], video_size=d["video"].size)
         a.video.save(d["video"].name, d["video"], save=False)
         a.save()
         run_analysis(a)
         audit(request, "pulse.upload", "pulse_analysis", a.id, method=a.method, status=a.status,
-              size_kb=a.video_size // 1024, consultation=str(consultation.pk) if consultation else None)
+              size_kb=a.video_size // 1024, consultation=str(consultation.pk) if consultation else None,
+              patient=str(patient.id))
         return Response(out(a), status=status.HTTP_201_CREATED)
 
 

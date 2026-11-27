@@ -22,10 +22,10 @@ class ApiClientAdmin(admin.ModelAdmin):
 
 @admin.register(Consultation)
 class ConsultationAdmin(admin.ModelAdmin):
-    list_display = ("session_uid", "patient", "status", "primary_system", "explanation_status", "created_at",
+    list_display = ("session_uid", "account", "patient", "status", "primary_system", "explanation_status", "created_at",
                     "deleted_at")
     list_filter = ("status", "explanation_status", "client")
-    search_fields = ("session_uid", "patient__username")
+    search_fields = ("session_uid", "account__username", "patient__full_name")
     readonly_fields = [f.name for f in Consultation._meta.fields]
 
     def has_add_permission(self, request):

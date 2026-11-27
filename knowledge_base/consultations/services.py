@@ -19,8 +19,8 @@ from nazria_kb.llm_engine import (EXPLAIN_ASK, EXTERNAL_NOTICE, RagResponder, ex
                                   is_vulnerable)
 from nazria_kb.providers import ProviderError, build_provider
 from nazria_kb.questionnaire import SYSTEM_ORGANS, TEHREEK_MIZAJ, Question
-from nazria_kb.safety import (DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS, VULNERABLE_NO_RECIPE,
-                              detect_red_flags, emergency_message)
+from nazria_kb.safety import (CONDITION_NO_RECIPE, DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS,
+                              VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message)
 
 from .backends import KnowledgeBase
 
@@ -139,12 +139,17 @@ def _message_for(q: Question, answer) -> str:
     return " ".join(str(i + 1) for i, o in enumerate(q.options) if o.key in keys)
 
 
-def run_consultation(kb: KnowledgeBase, questions: list[Question], answers: dict) -> Outcome:
-    """Replay validated answers through the questionnaire engine; returns the stored session and the API payload."""
+def run_consultation(kb: KnowledgeBase, questions: list[Question], answers: dict,
+                     health: dict | None = None) -> Outcome:
+    """Replay validated answers through the questionnaire engine; returns the stored session and the API payload.
+    ``health``: from the patient's general info, {"conditions": [keys], "caution": bool} (safety filters)."""
     engine = QuestionnaireEngine(kb.retriever(), questions)
     by_id = {q.id: q for q in questions}
     s = Session(engine="questionnaire")
     reply = engine.start(s)
+    if health:
+        s.meta["health_conditions"] = list(health.get("conditions") or [])
+        s.meta["medication_caution"] = bool(health.get("caution"))
     for _ in range(len(questions) + 1):
         if reply.done:
             break
@@ -193,6 +198,7 @@ def build_payload(s: Session, a: Assessment | None) -> dict:
         if a.recipe_status:
             hazards = [{"code": h, "name": HAZARD_NAMES_UR.get(h, h)} for h in a.hazards]
             message = (VULNERABLE_NO_RECIPE if a.recipe_status == "withheld_vulnerable" else
+                       CONDITION_NO_RECIPE if a.recipe_status == "withheld_condition" else
                        PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in a.hazards))
                        if a.recipe_status == "withheld_hazard" else None)
             recipe = {"status": a.recipe_status, "text": a.recipe, "dosage": a.dosage, "hazards": hazards,
@@ -205,8 +211,10 @@ def build_payload(s: Session, a: Assessment | None) -> dict:
                 "passages": [{"context": p.context, "excerpt": ex, "citation": _citation(p.volume_no, p.pages)}
                              for p, ex in a.passages]}
     from nazria_kb.engine import CHRONIC_ADVICE
+    from nazria_kb.safety import MEDICATION_ADVICE
+    advice = ([CHRONIC_ADVICE] if a.chronic else []) + ([MEDICATION_ADVICE] if a.caution else [])
     return {"status": "completed", "created_at": created, "emergency": None, "assessment": assessment, "book": book,
-            "advice": [CHRONIC_ADVICE] if a.chronic else [], "disclaimer": DISCLAIMER,
+            "advice": advice, "disclaimer": DISCLAIMER,
             "text": s.transcript[-1]["content"]}
 
 

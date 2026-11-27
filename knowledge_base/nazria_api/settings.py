@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "accounts",
     "audit",
+    "patients",
     "consultations",
     "pulse",
 ]
@@ -145,7 +146,7 @@ SPECTACULAR_SETTINGS = {
         "ConsultationStatusEnum": ["completed", "emergency"],
         "PulseStatusEnum": ["processing", "completed", "failed"],
         "ExplanationStatusEnum": ["shown", "not_covered", "rejected", "unavailable", "disabled"],
-        "RecipeStatusEnum": ["shown", "withheld_vulnerable", "withheld_hazard"],
+        "RecipeStatusEnum": ["shown", "withheld_vulnerable", "withheld_condition", "withheld_hazard"],
         "RoleEnum": ["patient", "hakeem", "admin"],
     },
     "POSTPROCESSING_HOOKS": ["drf_spectacular.hooks.postprocess_schema_enums",

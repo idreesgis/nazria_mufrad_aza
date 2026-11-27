@@ -3,16 +3,19 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 
-from accounts.staff_views import PatientHistoryView, PatientListView
+from accounts.staff_views import AccountHistoryView, AccountListView, StaffPatientHistoryView, StaffPatientListView
 from audit.views import MyActivityView, StaffAuditView
 
 api_v1 = [
     path("", include("consultations.urls")),
     path("", include("accounts.urls")),
     path("", include("pulse.urls")),
+    path("", include("patients.urls")),
     path("me/activity/", MyActivityView.as_view(), name="me-activity"),
-    path("staff/patients/", PatientListView.as_view(), name="staff-patients"),
-    path("staff/patients/<int:pk>/", PatientHistoryView.as_view(), name="staff-patient"),
+    path("staff/accounts/", AccountListView.as_view(), name="staff-accounts"),
+    path("staff/accounts/<int:pk>/", AccountHistoryView.as_view(), name="staff-account"),
+    path("staff/patients/", StaffPatientListView.as_view(), name="staff-patients"),
+    path("staff/patients/<uuid:pk>/", StaffPatientHistoryView.as_view(), name="staff-patient"),
     path("staff/audit/", StaffAuditView.as_view(), name="staff-audit"),
 ]
 urlpatterns = [path("api/v1/", include(api_v1))]
