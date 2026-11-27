@@ -7,6 +7,7 @@ import hmac
 import secrets
 import uuid
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -57,27 +58,24 @@ class ApiClient(models.Model):
 
 
 class Consultation(models.Model):
-    """Access record for one consultation: which client created it and the hash of its access token.
-    No patient text here: the answers and results live in nazria.consultation_sessions."""
+    """One consultation of a patient: owner, status and a few summary fields. The full content (answers, result,
+    transcript, AI explanation) is in nazria.consultation_sessions / consultation_messages. Kept permanently;
+    a patient's "delete" only hides it from their history (deleted_at)."""
     session_uid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    patient = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                related_name="consultations")
     client = models.ForeignKey(ApiClient, null=True, on_delete=models.SET_NULL, related_name="consultations")
-    token_hash = models.CharField(max_length=64, editable=False)
     status = models.CharField(max_length=20)                     # completed | emergency
     primary_system = models.CharField(max_length=20, blank=True)
     explanation_status = models.CharField(max_length=40, blank=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
+                                   related_name="+")
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["created_at"])]
+        indexes = [models.Index(fields=["created_at"]), models.Index(fields=["patient", "created_at"])]
 
     def __str__(self) -> str:
         return f"{self.session_uid} {self.status}"
-
-    @staticmethod
-    def new_token() -> tuple[str, str]:
-        token = secrets.token_urlsafe(32)
-        return token, _hash(token)
-
-    def token_matches(self, token: str | None) -> bool:
-        return bool(token) and hmac.compare_digest(self.token_hash, _hash(token))

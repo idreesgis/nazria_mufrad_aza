@@ -15,6 +15,9 @@ from nazria_kb.providers import env_flag
 from .dburl import database_from_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+if os.environ.get("NAZRIA_ENV_FILE"):                 # e.g. /etc/nazria/nazria.env on the server (manage.py commands)
+    from .envfile import load_env_file
+    load_env_file(os.environ["NAZRIA_ENV_FILE"])
 env = os.environ.get
 
 DEBUG = env_flag("DJANGO_DEBUG", False)
@@ -34,8 +37,12 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
+    "accounts",
+    "audit",
     "consultations",
+    "pulse",
 ]
 
 MIDDLEWARE = [
@@ -44,6 +51,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "audit.middleware.AuditMiddleware",                  # one audit row per API / admin request
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -76,7 +84,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -86,7 +94,7 @@ TIME_ZONE = env("DJANGO_TIME_ZONE") or "Asia/Karachi"
 USE_I18N = True
 USE_TZ = True
 STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_ROOT = Path(env("NAZRIA_STATIC_ROOT") or BASE_DIR / "staticfiles")
 
 # Rate-limit counters: "locmem" (per process, fine for one process) or "db" (shared by all gunicorn workers; run
 # `python manage.py createcachetable` once – the table is created in the API schema)
@@ -95,32 +103,66 @@ CACHES = {"default": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", 
           {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 # ---------------------------------------------------------------- REST framework
-API_RATE = env("NAZRIA_API_RATE") or "60/min"                    # per API client, all endpoints
-EXPLAIN_RATE = env("NAZRIA_API_EXPLAIN_RATE") or "10/min"        # per API client, AI explanations (cost)
+# Every request needs the app key (X-Api-Key, NAZRIA_REQUIRE_APP_KEY); patient and staff endpoints also need a
+# login token (Authorization: Bearer <access token> from /api/v1/auth/login/).
+NAZRIA_REQUIRE_APP_KEY = env_flag("NAZRIA_REQUIRE_APP_KEY", True)
+API_RATE = env("NAZRIA_API_RATE") or "60/min"                    # per logged-in user (per IP otherwise)
+EXPLAIN_RATE = env("NAZRIA_API_EXPLAIN_RATE") or "10/min"        # AI explanations (provider cost)
+AUTH_RATE = env("NAZRIA_API_AUTH_RATE") or "10/min"              # register / login / refresh, per IP
+PULSE_RATE = env("NAZRIA_API_PULSE_RATE") or "10/min"            # video uploads
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["consultations.authentication.ApiKeyAuthentication"],
-    "DEFAULT_PERMISSION_CLASSES": ["consultations.authentication.HasApiClient"],
-    "DEFAULT_THROTTLE_CLASSES": ["consultations.authentication.ClientRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"client": API_RATE, "explanation": EXPLAIN_RATE},
+    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework_simplejwt.authentication.JWTAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["accounts.permissions.HasAppKey", "rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_THROTTLE_CLASSES": ["accounts.throttles.UserRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {"user": API_RATE, "explanation": EXPLAIN_RATE, "auth": AUTH_RATE, "pulse": PULSE_RATE},
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"]
     + (["rest_framework.renderers.BrowsableAPIRenderer"] if DEBUG else []),
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "consultations.views.exception_handler",
-    "UNAUTHENTICATED_USER": None,
+}
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("NAZRIA_JWT_ACCESS_MINUTES") or 30)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=int(env("NAZRIA_JWT_REFRESH_DAYS") or 30)),
+    "ROTATE_REFRESH_TOKENS": True,            # each refresh returns a new refresh token …
+    "BLACKLIST_AFTER_ROTATION": True,         # … and the old one stops working
+    "UPDATE_LAST_LOGIN": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "SIGNING_KEY": SECRET_KEY,
 }
 SPECTACULAR_SETTINGS = {
     "TITLE": "Nazria Mufrad Aza API",
-    "DESCRIPTION": "Symptom questionnaire, book-based assessment and optional AI explanation for the Android app. "
-                   "Guidance only, not a diagnosis.",
-    "VERSION": "1.0.0",
+    "DESCRIPTION": "Patient accounts, symptom questionnaire, book-based assessment, pulse-video analysis and optional "
+                   "AI explanation for the Android app, with a complete audit log. Guidance only, not a diagnosis.",
+    "VERSION": "2.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
+    "ENUM_NAME_OVERRIDES": {
+        "ConsultationStatusEnum": ["completed", "emergency"],
+        "PulseStatusEnum": ["processing", "completed", "failed"],
+        "ExplanationStatusEnum": ["shown", "not_covered", "rejected", "unavailable", "disabled"],
+        "RecipeStatusEnum": ["shown", "withheld_vulnerable", "withheld_hazard"],
+        "RoleEnum": ["patient", "hakeem", "admin"],
+    },
+    "POSTPROCESSING_HOOKS": ["drf_spectacular.hooks.postprocess_schema_enums",
+                             "consultations.schema.add_app_key_header"],
 }
 # OpenAPI schema + Swagger UI at /api/schema/ and /api/docs/ (on in DEBUG; NAZRIA_API_DOCS=true to force)
 NAZRIA_API_DOCS = env_flag("NAZRIA_API_DOCS", DEBUG)
 # Django admin at /admin/ for staff (API clients, consultations); NAZRIA_ADMIN=false to switch off
 NAZRIA_ADMIN = env_flag("NAZRIA_ADMIN", True)
+
+# ---------------------------------------------------------------- patients and pulse videos
+NAZRIA_DEFAULT_COUNTRY_CODE = env("NAZRIA_DEFAULT_COUNTRY_CODE") or "92"     # 03001234567 -> +923001234567
+MEDIA_ROOT = Path(env("NAZRIA_MEDIA_ROOT") or BASE_DIR / "media")          # pulse videos (never served publicly)
+NAZRIA_PULSE_MAX_MB = int(env("NAZRIA_PULSE_MAX_MB") or 100)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024                              # larger uploads go to a temp file
+# behind nginx on the same machine: take the client IP from X-Forwarded-For (for the audit log)
+NAZRIA_TRUST_PROXY = env_flag("NAZRIA_TRUST_PROXY", False)
 
 # ---------------------------------------------------------------- knowledge base
 # "postgres" (the nazria schema in the same database) or a dotted path to a KnowledgeBase class (tests)
@@ -128,10 +170,13 @@ NAZRIA_KB_BACKEND = env("NAZRIA_KB_BACKEND") or "postgres"
 NAZRIA_QUESTIONS_CACHE_S = int(env("NAZRIA_QUESTIONS_CACHE_S") or 60)   # Hakeem edits show up within this time
 
 # ---------------------------------------------------------------- security (production)
+# NAZRIA_HTTPS=false while the server is reached over plain HTTP (cookies must then be allowed without HTTPS).
+# Plain HTTP sends passwords and health data unencrypted: switch to HTTPS as soon as possible (see deploy/).
+NAZRIA_HTTPS = env_flag("NAZRIA_HTTPS", True)
 if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = NAZRIA_HTTPS
+    CSRF_COOKIE_SECURE = NAZRIA_HTTPS
     SECURE_REFERRER_POLICY = "same-origin"
     X_FRAME_OPTIONS = "DENY"
     if env_flag("DJANGO_BEHIND_HTTPS_PROXY"):            # e.g. nginx terminating TLS

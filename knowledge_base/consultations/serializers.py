@@ -139,10 +139,27 @@ class ExplanationOut(serializers.Serializer):
                                    help_text="Show to the patient when an external AI service was used")
 
 
+class PulseSummaryOut(serializers.Serializer):
+    id = serializers.UUIDField()
+    status = serializers.CharField()
+    method = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    average_heart_rate_bpm = serializers.FloatField(allow_null=True)
+
+
+class ConsultationSummaryOut(serializers.Serializer):
+    id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=["completed", "emergency"])
+    created_at = serializers.DateTimeField()
+    primary_system = serializers.CharField(allow_null=True)
+    explanation_status = serializers.CharField(allow_null=True)
+    complaint = serializers.CharField()
+    deleted = serializers.BooleanField(help_text="Hidden by the patient (only staff see these)")
+
+
 class ConsultationOut(serializers.Serializer):
     id = serializers.UUIDField()
-    access_token = serializers.CharField(required=False, help_text="Returned once, on creation. Send it as "
-                                         "X-Consultation-Token to read, explain or delete this consultation")
+    patient = serializers.IntegerField(help_text="User id of the patient")
     status = serializers.ChoiceField(choices=["completed", "emergency"])
     created_at = serializers.DateTimeField()
     emergency = EmergencyOut(allow_null=True)
@@ -153,6 +170,8 @@ class ConsultationOut(serializers.Serializer):
     text = serializers.CharField(help_text="The whole result as Urdu text (same as the CLI), for simple display")
     explanation = ExplanationOut(allow_null=True)
     explanation_available = serializers.BooleanField(help_text="True when the server can explain this result with AI")
+    pulse_analyses = PulseSummaryOut(many=True)
+    deleted = serializers.BooleanField()
 
 
 class HealthOut(serializers.Serializer):

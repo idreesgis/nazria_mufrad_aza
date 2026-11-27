@@ -22,9 +22,14 @@ class ApiClientAdmin(admin.ModelAdmin):
 
 @admin.register(Consultation)
 class ConsultationAdmin(admin.ModelAdmin):
-    list_display = ("session_uid", "status", "primary_system", "explanation_status", "client", "created_at")
+    list_display = ("session_uid", "patient", "status", "primary_system", "explanation_status", "created_at",
+                    "deleted_at")
     list_filter = ("status", "explanation_status", "client")
+    search_fields = ("session_uid", "patient__username")
     readonly_fields = [f.name for f in Consultation._meta.fields]
 
     def has_add_permission(self, request):
         return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False                     # complete history is kept

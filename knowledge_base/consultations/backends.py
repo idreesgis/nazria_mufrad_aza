@@ -23,6 +23,7 @@ class KnowledgeBase(Protocol):
     def save_session(self, session: Session) -> None: ...
     def load_session(self, session_uid: str) -> Session | None: ...
     def delete_session(self, session_uid: str) -> bool: ...
+    def session_summaries(self, session_uids: list[str]) -> dict[str, dict]: ...
     def ping(self) -> None: ...
 
 
@@ -66,6 +67,15 @@ class PostgresKnowledgeBase:
     def delete_session(self, session_uid: str) -> bool:
         from nazria_kb.db import delete_session
         return delete_session(self._factory(), session_uid)
+
+    def session_summaries(self, session_uids: list[str]) -> dict[str, dict]:
+        """{uid: {"complaint", "status", "primary_system"}} for history lists (one query)."""
+        if not session_uids:
+            return {}
+        rows = self._factory().execute(
+            "SELECT session_uid::text, answers->>'complaint', status, result->>'primary_system' "
+            "FROM nazria.consultation_sessions WHERE session_uid = ANY(%s::uuid[])", (list(session_uids),)).fetchall()
+        return {uid: {"complaint": c or "", "status": st, "primary_system": ps} for uid, c, st, ps in rows}
 
     def ping(self) -> None:
         self._factory().execute("SELECT 1 FROM nazria.schema_version LIMIT 1").fetchone()
@@ -133,6 +143,11 @@ class MemoryKnowledgeBase:
 
     def delete_session(self, session_uid: str) -> bool:
         return self.sessions.pop(str(session_uid), None) is not None
+
+    def session_summaries(self, session_uids: list[str]) -> dict[str, dict]:
+        return {u: {"complaint": s.answers.get("complaint", ""), "status": s.status,
+                    "primary_system": s.result.get("primary_system")}
+                for u in session_uids if (s := self.sessions.get(str(u)))}
 
     def ping(self) -> None:
         return None

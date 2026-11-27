@@ -12,4 +12,8 @@ DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memor
 NAZRIA_KB_BACKEND = "consultations.backends.MemoryKnowledgeBase"
 NAZRIA_API_DOCS = True
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]      # fast tests only
-REST_FRAMEWORK = {**REST_FRAMEWORK, "DEFAULT_THROTTLE_RATES": {"client": "1000/min", "explanation": "1000/min"}}  # noqa: F405
+REST_FRAMEWORK = {**REST_FRAMEWORK, "DEFAULT_THROTTLE_RATES": {  # noqa: F405
+    "user": "1000/min", "explanation": "1000/min", "auth": "1000/min", "pulse": "1000/min"}}
+import tempfile  # noqa: E402
+
+MEDIA_ROOT = tempfile.mkdtemp(prefix="nazria-test-media-")

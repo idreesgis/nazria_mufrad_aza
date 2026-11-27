@@ -5,22 +5,25 @@ import logging
 
 from django.db import DatabaseError as DjangoDatabaseError
 from django.db import transaction
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import status
+from django.utils import timezone
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.views import exception_handler as drf_exception_handler
 
+from accounts.models import is_staff_user
+from accounts.permissions import HasAppKey
+from accounts.throttles import ExplanationRateThrottle, UserRateThrottle
+from audit.middleware import audit
+
 from . import serializers as S
 from . import services
-from .authentication import ClientRateThrottle, ExplanationRateThrottle
 from .backends import knowledge_base
 from .models import Consultation
 
 log = logging.getLogger("consultations")
-TOKEN_HEADER = OpenApiParameter("X-Consultation-Token", str, OpenApiParameter.HEADER, required=True,
-                                description="The access_token returned when the consultation was created")
 
 
 def _error(code: str, detail: str, http: int, fields: dict | None = None) -> Response:
@@ -74,7 +77,8 @@ class HealthView(APIView):
 
 
 class QuestionnaireView(APIView):
-    """The questions and options the app shows, in order (as edited by a Hakeem in the database)."""
+    """The questions and options the app shows, in order (as edited by a Hakeem in the database). No login needed."""
+    permission_classes = [HasAppKey]
 
     @extend_schema(responses={200: S.QuestionnaireOut})
     def get(self, request):
@@ -82,7 +86,9 @@ class QuestionnaireView(APIView):
 
 
 class TriageView(APIView):
-    """Emergency check for the first answers. Call it after the red-flag question (and after the complaint)."""
+    """Emergency check for the first answers. Call it after the red-flag question (and after the complaint).
+    No login needed: an emergency must never wait for a login."""
+    permission_classes = [HasAppKey]
 
     @extend_schema(request=S.TriageRequest, responses={200: S.TriageOut, 400: S.ErrorOut})
     def post(self, request):
@@ -92,19 +98,49 @@ class TriageView(APIView):
         bad = [f for f in req.validated_data["red_flags"] if f not in known]
         if bad:
             return _error("invalid_request", "unknown red-flag option", 400, {"red_flags": f"unknown: {bad}"})
-        return Response(services.triage(req.validated_data["red_flags"], req.validated_data.get("complaint")))
+        result = services.triage(req.validated_data["red_flags"], req.validated_data.get("complaint"))
+        audit(request, "triage", "", None, emergency=result["emergency"], flags=result["flags"])
+        return Response(result)
 
 
-def _consultation_body(c: Consultation, session, token: str | None = None) -> dict:
+def consultation_body(c: Consultation, session) -> dict:
     payload = dict(session.result.get("api") or {})
-    body = {"id": str(c.session_uid), **({"access_token": token} if token else {}), **payload,
+    pulses = [{"id": str(p.id), "status": p.status, "method": p.method, "created_at": p.created_at,
+               "average_heart_rate_bpm": (p.result or {}).get("average_heart_rate_bpm")}
+              for p in c.pulse_analyses.all() if p.deleted_at is None]
+    return {"id": str(c.session_uid), "patient": c.patient_id, **payload,
             "explanation": session.result.get("explanation"),
-            "explanation_available": payload.get("status") == "completed" and services.explanation_enabled()}
-    return body
+            "explanation_available": payload.get("status") == "completed" and services.explanation_enabled(),
+            "pulse_analyses": pulses, "deleted": c.deleted_at is not None}
 
 
-class ConsultationCreateView(APIView):
-    """Submit all answers; returns the assessment (or the emergency referral). Stored for later reading."""
+def summaries(consultations: list[Consultation]) -> list[dict]:
+    extra = knowledge_base().session_summaries([str(c.session_uid) for c in consultations])
+    return [{"id": str(c.session_uid), "status": c.status, "created_at": c.created_at,
+             "primary_system": c.primary_system or None, "explanation_status": c.explanation_status or None,
+             "complaint": extra.get(str(c.session_uid), {}).get("complaint", ""), "deleted": c.deleted_at is not None}
+            for c in consultations]
+
+
+def visible(request):
+    """Consultations the caller may see: their own (not hidden); staff see all, hidden ones included."""
+    if is_staff_user(request.user):
+        return Consultation.objects.all()
+    return Consultation.objects.filter(patient=request.user, deleted_at__isnull=True)
+
+
+class ConsultationListCreateView(generics.ListAPIView):
+    """GET: your consultation history, newest first. POST: submit all answers and get the assessment
+    (or the emergency referral); it is stored in your history."""
+    serializer_class = S.ConsultationSummaryOut
+
+    def get_queryset(self):
+        return visible(self.request).filter(patient=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        page = self.paginate_queryset(self.get_queryset())
+        audit(request, "consultation.list", "user", request.user.pk)
+        return self.get_paginated_response(summaries(page))
 
     @extend_schema(request=S.ConsultationRequest,
                    responses={201: S.ConsultationOut, 400: S.ErrorOut, 503: S.ErrorOut})
@@ -116,52 +152,55 @@ class ConsultationCreateView(APIView):
         answers = services.validate_answers(questions, req.validated_data["answers"])
         outcome = services.run_consultation(kb, questions, answers)
         s = outcome.session
-        token, token_hash = Consultation.new_token()
         with transaction.atomic():
             kb.save_session(s)
-            c = Consultation.objects.create(session_uid=s.session_uid, client=request.auth, token_hash=token_hash,
-                                            status=s.status, primary_system=s.result.get("primary_system") or "")
-        return Response(_consultation_body(c, s, token), status=status.HTTP_201_CREATED)
+            c = Consultation.objects.create(session_uid=s.session_uid, patient=request.user,
+                                            client=getattr(request._request, "api_client", None), status=s.status,
+                                            primary_system=s.result.get("primary_system") or "")
+        audit(request, "consultation.create", "consultation", c.session_uid, status=c.status,
+              primary_system=c.primary_system or None)
+        return Response(consultation_body(c, s), status=status.HTTP_201_CREATED)
 
 
-class _OwnedConsultation(APIView):
+class _VisibleConsultation(APIView):
     def _get(self, request, pk):
-        c = Consultation.objects.filter(session_uid=pk).first()
-        if c is None or not c.token_matches(request.headers.get("X-Consultation-Token")):
-            return None, None, _error("not_found", "no such consultation", 404)
-        s = knowledge_base().load_session(str(pk))
+        c = visible(request).filter(session_uid=pk).first()
+        s = knowledge_base().load_session(str(pk)) if c else None
         if s is None:
             return None, None, _error("not_found", "no such consultation", 404)
         return c, s, None
 
 
-class ConsultationDetailView(_OwnedConsultation):
-    """Read a stored consultation again, or delete it (the patient's data is removed from the server)."""
+class ConsultationDetailView(_VisibleConsultation):
+    """One consultation. DELETE hides it from your history (everything is kept on the server)."""
 
-    @extend_schema(parameters=[TOKEN_HEADER], responses={200: S.ConsultationOut, 404: S.ErrorOut})
+    @extend_schema(responses={200: S.ConsultationOut, 404: S.ErrorOut})
     def get(self, request, pk):
-        c, s, err = self._get(request, pk)
-        return err or Response(_consultation_body(c, s))
-
-    @extend_schema(parameters=[TOKEN_HEADER], responses={204: None, 404: S.ErrorOut})
-    def delete(self, request, pk):
         c, s, err = self._get(request, pk)
         if err:
             return err
-        with transaction.atomic():
-            knowledge_base().delete_session(str(pk))
-            c.delete()
+        audit(request, "consultation.view", "consultation", pk)
+        return Response(consultation_body(c, s))
+
+    @extend_schema(responses={204: None, 404: S.ErrorOut})
+    def delete(self, request, pk):
+        c, s, err = self._get(request, pk)
+        if err or c.deleted_at:
+            return err or _error("not_found", "no such consultation", 404)
+        Consultation.objects.filter(pk=c.pk).update(deleted_at=timezone.now(), deleted_by=request.user)
+        audit(request, "consultation.delete", "consultation", pk)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ExplanationView(_OwnedConsultation):
+class ExplanationView(_VisibleConsultation):
     """AI explanation of a completed result in plain Urdu, using only book passages (may take 10–30 s).
     Returns status "disabled" while the server runs with NAZRIA_ENGINE=questionnaire."""
-    throttle_classes = [ClientRateThrottle, ExplanationRateThrottle]
 
-    @extend_schema(parameters=[TOKEN_HEADER], request=None,
-                   responses={200: S.ExplanationOut, 404: S.ErrorOut, 409: S.ErrorOut,
-                              429: OpenApiResponse(description="too many explanation requests")})
+    def get_throttles(self):
+        return [ExplanationRateThrottle(), UserRateThrottle()]
+
+    @extend_schema(request=None, responses={200: S.ExplanationOut, 404: S.ErrorOut, 409: S.ErrorOut,
+                                            429: OpenApiResponse(description="too many explanation requests")})
     def post(self, request, pk):
         c, s, err = self._get(request, pk)
         if err:
@@ -171,4 +210,6 @@ class ExplanationView(_OwnedConsultation):
         result = services.explain(knowledge_base(), s)
         if c.explanation_status != result["status"]:
             Consultation.objects.filter(pk=c.pk).update(explanation_status=result["status"])
+        audit(request, "consultation.explain", "consultation", pk, status=result["status"],
+              reason=result.get("reason"), model=result.get("model"))
         return Response(result)
