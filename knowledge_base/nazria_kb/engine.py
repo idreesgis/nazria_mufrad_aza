@@ -23,7 +23,8 @@ from .dialogues import excerpt
 from .normalize import search_key, to_int
 from .providers import PROVIDERS  # noqa: F401  (re-exported for backward compatibility)
 from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, Score, score
-from .safety import (DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, VULNERABLE_NO_RECIPE, detect_red_flags,
+from .safety import (CONDITION_NO_RECIPE, DISCLAIMER, HAZARD_NAMES_UR, MEDICATION_ADVICE, PRACTITIONER_ONLY,
+                     RECIPE_RISK_CONDITIONS, VULNERABLE_NO_RECIPE, detect_red_flags,
                      emergency_message, hazard_flags, safe_for_patient)
 
 log = logging.getLogger("nazria_kb.engine")
@@ -269,7 +270,8 @@ class QuestionnaireEngine:
         return Reply(msg, done=True, data=s.result)
 
     def _finish(self, s: Session) -> Reply:
-        a = assess(self.questions, s.answers, self.retriever)
+        a = assess(self.questions, s.answers, self.retriever, conditions=s.meta.get("health_conditions"),
+                   caution=bool(s.meta.get("medication_caution")))
         s.meta["assessment"] = a            # structured form for the REST API (not stored in the DB)
         text = render_assessment(a)
         s.status = "completed"
@@ -289,7 +291,8 @@ CHRONIC_ADVICE = "چونکہ تکلیف پرانی ہے، کسی مستند حک
 class Assessment:
     """Everything a finished questionnaire produces, before it is turned into text.
 
-    ``recipe_status``: ``shown`` | ``withheld_vulnerable`` | ``withheld_hazard`` | None (the chapter has no recipe).
+    ``recipe_status``: ``shown`` | ``withheld_vulnerable`` | ``withheld_condition`` | ``withheld_hazard`` | None (the
+    chapter has no recipe). ``withheld_condition``: the patient has kidney, liver or heart disease (patient info).
     ``passages`` is used only when no chapter matched the complaint: (passage, excerpt shown to the patient)."""
     score: Score
     vulnerable: bool
@@ -302,17 +305,21 @@ class Assessment:
     hazards: list[str] = field(default_factory=list)
     diet: str | None = None
     passages: list[tuple[Passage, str]] = field(default_factory=list)
+    caution: bool = False                 # the patient takes medicines or has allergies (MEDICATION_ADVICE)
 
 
 def is_vulnerable_answers(answers: dict) -> bool:
     return answers.get("age_group") in ("child", "elderly") or answers.get("pregnancy") == "yes"
 
 
-def assess(questions: list[Question], answers: dict, retriever: Retriever) -> Assessment:
-    """Score the answers and pick what the book may show this patient (all safety filters applied here)."""
+def assess(questions: list[Question], answers: dict, retriever: Retriever, conditions: list[str] | None = None,
+           caution: bool = False) -> Assessment:
+    """Score the answers and pick what the book may show this patient (all safety filters applied here).
+    ``conditions``: the patient's known chronic conditions (keys); ``caution``: takes medicines / has allergies."""
     sc = score(questions, answers)
     vulnerable = is_vulnerable_answers(answers)
-    a = Assessment(sc, vulnerable, answers.get("duration") == "chronic")
+    condition_risk = bool(set(conditions or ()) & RECIPE_RISK_CONDITIONS)
+    a = Assessment(sc, vulnerable, answers.get("duration") == "chronic", caution=caution)
     hits = retriever.topics_for(answers.get("complaint", ""), sc.primary)
     if hits:
         h = a.topic = hits[0]
@@ -332,6 +339,8 @@ def assess(questions: list[Question], answers: dict, retriever: Retriever) -> As
             a.hazards = hazard_flags(recipe)
             if vulnerable:
                 a.recipe_status = "withheld_vulnerable"
+            elif condition_risk:
+                a.recipe_status = "withheld_condition"
             elif a.hazards:
                 a.recipe_status = "withheld_hazard"
             else:
@@ -374,6 +383,8 @@ def render_assessment(a: Assessment) -> str:
             lines.append(a.description)
         if a.recipe_status == "withheld_vulnerable":
             lines += ["", VULNERABLE_NO_RECIPE]
+        elif a.recipe_status == "withheld_condition":
+            lines += ["", CONDITION_NO_RECIPE]
         elif a.recipe_status == "withheld_hazard":
             lines += ["", PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in a.hazards))]
         elif a.recipe_status == "shown":
@@ -390,6 +401,8 @@ def render_assessment(a: Assessment) -> str:
         lines += ["", "کتاب میں اس تکلیف کے بارے میں کوئی واضح باب نہیں ملا۔"]
     if a.chronic:
         lines += ["", CHRONIC_ADVICE]
+    if a.caution:
+        lines += ["", MEDICATION_ADVICE]
     lines += ["", DISCLAIMER]
     return "\n".join(lines)
 
