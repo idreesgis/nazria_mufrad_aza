@@ -104,6 +104,12 @@ Alternative without Python on the target: restore the dump
    foods of the next tehreek in the cycle), with the book's eating rules (pp. 683–688). If only the dominant system is
    known, the plans of its two tehreeks, each with the feeling that tells which one applies. Notes for diabetes, high
    blood pressure, kidney/liver/heart disease, allergies and medicines come from the patient's info.
+6. **Three languages** (`nazria_kb/i18n.py`): Urdu is the source; every fixed patient text (questions, messages,
+   result, diet plan, intake form, pulse messages) has English and Arabic translations, and `tests/test_i18n.py`
+   fails when one is missing. The API chooses the language by `?lang=`, `Accept-Language` or the user's saved
+   language. Emergencies, hazardous ingredients and recipe-like text are detected in all three languages, English
+   and Arabic complaints are matched to the Urdu book through a glossary, and book excerpts stay in the original
+   Urdu.
 
 Safety (`nazria_kb/safety.py`):
 - Recipes containing arsenic, mercury, copper sulphate, kushta, aconite, nux vomica, opium, lead and similar are never shown.

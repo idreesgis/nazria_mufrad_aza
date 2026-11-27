@@ -17,6 +17,36 @@ This is the single backend for the app. It provides:
 - Every response has an `X-Request-ID` header. It matches the audit log entry, so quote it when reporting a
   problem.
 
+## Languages: Urdu, English, Arabic
+
+Every patient-facing text is available in **Urdu (`ur`, the default), English (`en`) and Arabic (`ar`)**: questions
+and options, the intake form, triage and emergency messages, the result and its text, advice, diet plans, pulse
+messages and the AI explanation.
+
+- **Choosing the language:** the server uses, in this order:
+  1. `?lang=en|ur|ar` on any request;
+  2. the `Accept-Language` header (for example `ar-SA,ar;q=0.9`);
+  3. the user's saved `language` (`PATCH /me/ {"language": "en"}`, or `language` at registration or Google sign-up);
+  4. Urdu.
+- **Every response says which language it used:** `language` and `direction` (`rtl` for Urdu and Arabic, `ltr` for
+  English), plus a `Content-Language` header. Lay the screen out by `direction`.
+- **Answers are language-neutral:** option keys don't change with the language. Logic should use the codes:
+  `primary_system_code` (`nervous`, `muscular`, `glandular`), `tehreek_code` (e.g. `muscular_glandular`),
+  `system_code` on each evidence row, and `totals` keyed by these codes. The names next to them are for display.
+- **Switching language keeps the history readable:** a result is saved in all three languages, so
+  `GET /consultations/{id}/?lang=ar` returns the same result in Arabic. Results saved before this version exist in
+  Urdu only.
+- **The free-text complaint** may be typed in any of the three languages:
+  - It is always screened for emergencies in Urdu, English and Arabic.
+  - Common complaints in English or Arabic (constipation, cough, fever, …) are matched to the book's topics.
+- **Book text stays in the original Urdu:** `book.description`, `book.recipe`, `book.diet` and `book.passages`
+  (`book.language` is `"ur"`), because a machine-translated recipe could harm. In `text` their headings say
+  "original text in Urdu".
+- **The AI explanation** (`POST /consultations/{id}/explanation/?lang=en`) is written in the requested language,
+  and each language's explanation is stored separately. The same safety checks apply in every language:
+  hazardous ingredients, no recipes for vulnerable patients, and grounded citations (removed before display).
+- **Error bodies:** `detail` stays in English for developers. Show your own text for each `error` code.
+
 ## Headers
 
 | Header | When |
@@ -200,22 +230,24 @@ GET  /patients/{id}/history/             every change to the general info: who, 
 ### Consultation result (`POST /consultations/`)
 
 ```json
-{"id": "6f0c…", "account": 12, "rediagnosis_of": null, "status": "completed", "created_at": "…", "emergency": null,
+{"id": "6f0c…", "language": "en", "direction": "ltr", "account": 12, "rediagnosis_of": null, "status": "completed", "created_at": "…", "emergency": null,
  "patient": {"id": "a41e…", "full_name": "…", "relation": "child", "gender": "female", "birth_year": 2019, "age": 7,
              "age_group": "child", "weight_kg": 18.5, "height_cm": null, "bmi": null, "chronic_conditions": [],
              "conditions_other": "", "allergies": "", "medications": ""},
  "prefilled_answers": {"age_group": "child", "pregnancy": "na"},
- "assessment": {"conclusive": true, "primary_system": "عضلاتی", "primary_organs": "قلب و عضلات", "tehreek": null,
-                "mizaj": null, "confidence": 1.0, "totals": {"اعصابی": 0, "عضلاتی": 8, "غدی": 0}, "vulnerable": false,
+ "assessment": {"conclusive": true, "primary_system": "Muscular", "primary_system_code": "muscular",
+                "primary_organs": "heart and muscles", "tehreek": null, "tehreek_code": null,
+                "mizaj": null, "confidence": 1.0, "totals": {"nervous": 0, "muscular": 8, "glandular": 0}, "vulnerable": false,
                 "evidence": [{"question_id": "urine_color", "option_key": "red", "question": "…",
-                              "answer": "سرخ یا سرخی مائل", "system": "عضلاتی"}, …]},
- "book": {"topic": {"id": 1603, "title": "عضلاتی قبض"},
+                              "answer": "Red or reddish", "system": "Muscular", "system_code": "muscular"}, …]},
+ "book": {"language": "ur", "topic": {"id": 1603, "title": "عضلاتی قبض"},
           "description": "…", "recipe": {"status": "shown", "text": "…", "dosage": null, "hazards": [], "message": null},
           "diet": null, "passages": []},
- "diet_plans": [{"tehreek": "عضلاتی اعصابی", "mizaj": "سرد خشک", "choose_if": "اگر جسم میں خشکی کے ساتھ سردی محسوس ہو",
+ "diet_plans": [{"tehreek": "Muscular-Nervous", "tehreek_code": "muscular_nervous", "mizaj": "cold and dry",
+                 "choose_if": "If you feel dryness with cold",
                  "breakfast": ["…"], "lunch": ["…"], "dinner": ["…"], "fruits": ["…"], "dry_fruits": ["…"],
-                 "qehwa": {"name": "دارچینی اور لونگ کا قہوہ", "ingredients": ["…"], "how": "…"},
-                 "rules": ["…"], "notes": []}, {"tehreek": "عضلاتی غدی", …}],
+                 "qehwa": {"name": "cinnamon and clove qehwa", "ingredients": ["…"], "how": "…"},
+                 "rules": ["…"], "notes": []}, {"tehreek": "Muscular-Glandular", …}],
  "advice": ["…"], "disclaimer": "…", "text": "<the whole result as Urdu text>",
  "explanation": null, "explanation_available": false, "pulse_analyses": [], "deleted": false}
 ```
@@ -260,7 +292,9 @@ An emergency result has `"status": "emergency"` and `"emergency": {"flags", "fla
  "disclaimer": "Pulse analysis from a phone camera is experimental … تشخیص نہیں۔"}
 ```
 
-`status: "failed"` comes with a short `error` the app can show, for example "too few heartbeats were detected;
+Each analysis also has `summary` (heart rate, rhythm, strength, volume, tension, rate pattern in the response
+language), and `error_en` (the error in English, for logs). `status: "failed"` comes with a short `error` in the
+response language that the app can show, for example "too few heartbeats were detected;
 keep the finger still on the lens". Always show the `disclaimer`. The analysis is experimental.
 
 ## History and audit

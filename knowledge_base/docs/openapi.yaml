@@ -1383,16 +1383,31 @@ components:
         primary_system:
           type: string
           nullable: true
-          description: اعصابی | عضلاتی | غدی
+          description: In the response language
+        primary_system_code:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/SystemCodeEnum'
+          - $ref: '#/components/schemas/NullEnum'
         primary_organs:
           type: string
           nullable: true
         secondary_system:
           type: string
           nullable: true
+        secondary_system_code:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/SystemCodeEnum'
+          - $ref: '#/components/schemas/NullEnum'
         tehreek:
           type: string
           nullable: true
+          description: In the response language
+        tehreek_code:
+          type: string
+          nullable: true
+          description: e.g. "muscular_glandular"
         mizaj:
           type: string
           nullable: true
@@ -1403,6 +1418,7 @@ components:
           type: object
           additionalProperties:
             type: integer
+          description: '{"nervous": n, "muscular": n, "glandular": n}'
         evidence:
           type: array
           items:
@@ -1417,8 +1433,11 @@ components:
       - mizaj
       - primary_organs
       - primary_system
+      - primary_system_code
       - secondary_system
+      - secondary_system_code
       - tehreek
+      - tehreek_code
       - totals
       - vulnerable
     AuditEventOut:
@@ -1488,6 +1507,9 @@ components:
     BookOut:
       type: object
       properties:
+        language:
+          type: string
+          description: 'Always "ur": book text is shown in the original Urdu'
         topic:
           allOf:
           - $ref: '#/components/schemas/TopicOut'
@@ -1510,6 +1532,7 @@ components:
       required:
       - description
       - diet
+      - language
       - passages
       - recipe
       - topic
@@ -1543,6 +1566,23 @@ components:
         id:
           type: string
           format: uuid
+        language:
+          allOf:
+          - $ref: '#/components/schemas/LanguageEnum'
+          description: |-
+            Language of the texts in this response
+
+            * `ur` - ur
+            * `en` - en
+            * `ar` - ar
+        direction:
+          allOf:
+          - $ref: '#/components/schemas/DirectionEnum'
+          description: |-
+            Text direction for that language
+
+            * `rtl` - rtl
+            * `ltr` - ltr
         account:
           type: integer
           description: User id of the account the patient belongs to
@@ -1617,11 +1657,13 @@ components:
       - created_at
       - deleted
       - diet_plans
+      - direction
       - disclaimer
       - emergency
       - explanation
       - explanation_available
       - id
+      - language
       - patient
       - prefilled_answers
       - pulse_analyses
@@ -1681,6 +1723,9 @@ components:
         primary_system:
           type: string
           nullable: true
+        primary_system_code:
+          type: string
+          nullable: true
         explanation_status:
           type: string
           nullable: true
@@ -1697,6 +1742,7 @@ components:
       - id
       - patient
       - primary_system
+      - primary_system_code
       - rediagnosis_of
       - status
     DietPlanOut:
@@ -1704,7 +1750,9 @@ components:
       properties:
         tehreek:
           type: string
-          description: The tehreek this plan is for
+          description: The tehreek this plan is for, in the response language
+        tehreek_code:
+          type: string
         mizaj:
           type: string
         choose_if:
@@ -1757,6 +1805,15 @@ components:
       - qehwa
       - rules
       - tehreek
+      - tehreek_code
+    DirectionEnum:
+      enum:
+      - rtl
+      - ltr
+      type: string
+      description: |-
+        * `rtl` - rtl
+        * `ltr` - ltr
     EmergencyOut:
       type: object
       properties:
@@ -1801,13 +1858,16 @@ components:
           type: string
         system:
           type: string
-          description: 'The system this symptom points to: اعصابی | عضلاتی | غدی'
+          description: The system this symptom points to, in the response language
+        system_code:
+          $ref: '#/components/schemas/SystemCodeEnum'
       required:
       - answer
       - option_key
       - question
       - question_id
       - system
+      - system_code
     ExplanationOut:
       type: object
       properties:
@@ -1830,6 +1890,8 @@ components:
           type: string
           nullable: true
           description: Show to the patient when an external AI service was used
+        language:
+          $ref: '#/components/schemas/LanguageEnum'
       required:
       - status
     ExplanationStatusEnum:
@@ -1893,6 +1955,15 @@ components:
           maximum: 2100
           minimum: 1900
           nullable: true
+        language:
+          allOf:
+          - $ref: '#/components/schemas/LanguageEnum'
+          description: |-
+            Language of the app's texts: ur | en | ar
+
+            * `ur` - ur
+            * `en` - en
+            * `ar` - ar
       required:
       - id_token
     GoogleTokensOut:
@@ -1997,6 +2068,10 @@ components:
       properties:
         version:
           type: string
+        language:
+          $ref: '#/components/schemas/LanguageEnum'
+        direction:
+          $ref: '#/components/schemas/DirectionEnum'
         fields:
           type: array
           items:
@@ -2006,9 +2081,21 @@ components:
           additionalProperties:
             type: string
       required:
+      - direction
       - fields
+      - language
       - prefills
       - version
+    LanguageEnum:
+      enum:
+      - ur
+      - en
+      - ar
+      type: string
+      description: |-
+        * `ur` - ur
+        * `en` - en
+        * `ar` - ar
     LoginInRequest:
       type: object
       properties:
@@ -2032,6 +2119,9 @@ components:
       description: |-
         * `finger` - finger
         * `wrist` - wrist
+    NullEnum:
+      enum:
+      - null
     OptionOut:
       type: object
       properties:
@@ -2297,6 +2387,15 @@ components:
           minLength: 1
           description: Only accepted while the account has no phone yet (Google accounts)
           maxLength: 30
+        language:
+          allOf:
+          - $ref: '#/components/schemas/ProfileInLanguageEnum'
+          description: |-
+            language of the app's texts for this user
+
+            * `ur` - اردو
+            * `en` - English
+            * `ar` - العربية
     PatientInRequest:
       type: object
       description: 'General info of a patient (create: full_name, relation, gender,
@@ -2515,6 +2614,16 @@ components:
       - medications
       - relation
       - weight_kg
+    ProfileInLanguageEnum:
+      enum:
+      - ur
+      - en
+      - ar
+      type: string
+      description: |-
+        * `ur` - اردو
+        * `en` - English
+        * `ar` - العربية
     ProfileOut:
       type: object
       properties:
@@ -2546,6 +2655,8 @@ components:
         has_password:
           type: boolean
           description: False for a Google-only account (phone login not possible)
+        language:
+          $ref: '#/components/schemas/LanguageEnum'
         linked_providers:
           type: array
           items:
@@ -2560,6 +2671,7 @@ components:
       - gender
       - has_password
       - id
+      - language
       - linked_providers
       - phone
       - role
@@ -2601,6 +2713,19 @@ components:
           type: string
           format: date-time
           nullable: true
+        error_en:
+          type: string
+          description: The error in English (for logs)
+        summary:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: Heart rate, rhythm, strength, volume, tension, rate_pattern
+            in the requested language
+        language:
+          type: string
+        direction:
+          type: string
         disclaimer:
           type: string
           default: ''
@@ -2751,7 +2876,25 @@ components:
       properties:
         version:
           type: string
-          description: Changes whenever a Hakeem edits the questions; cache by it
+          description: Changes whenever the questions change (per language); cache
+            by it
+        language:
+          allOf:
+          - $ref: '#/components/schemas/LanguageEnum'
+          description: |-
+            Language of the texts in this response
+
+            * `ur` - ur
+            * `en` - en
+            * `ar` - ar
+        direction:
+          allOf:
+          - $ref: '#/components/schemas/DirectionEnum'
+          description: |-
+            Text direction for that language
+
+            * `rtl` - rtl
+            * `ltr` - ltr
         disclaimer:
           type: string
         questions:
@@ -2759,7 +2902,9 @@ components:
           items:
             $ref: '#/components/schemas/QuestionOut'
       required:
+      - direction
       - disclaimer
+      - language
       - questions
       - version
     RecipeOut:
@@ -2848,6 +2993,15 @@ components:
         consent:
           type: boolean
           description: The patient accepted the disclaimer (guidance, not diagnosis)
+        language:
+          allOf:
+          - $ref: '#/components/schemas/LanguageEnum'
+          description: |-
+            Language of the app's texts: ur | en | ar
+
+            * `ur` - ur
+            * `en` - en
+            * `ar` - ar
       required:
       - consent
       - password
@@ -2979,6 +3133,16 @@ components:
               type: string
       required:
       - symptom_categories
+    SystemCodeEnum:
+      enum:
+      - nervous
+      - muscular
+      - glandular
+      type: string
+      description: |-
+        * `nervous` - nervous
+        * `muscular` - muscular
+        * `glandular` - glandular
     TokensOut:
       type: object
       properties:
@@ -3021,10 +3185,13 @@ components:
           type: string
           nullable: true
           description: Show this and stop when emergency is true
+        language:
+          $ref: '#/components/schemas/LanguageEnum'
       required:
       - emergency
       - flag_labels
       - flags
+      - language
       - message
     TriageRequestRequest:
       type: object
