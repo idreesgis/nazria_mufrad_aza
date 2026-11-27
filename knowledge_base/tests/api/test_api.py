@@ -25,7 +25,7 @@ def token_get(api, r, suffix="", method="get"):
 def test_health_needs_no_key(client):
     r = client.get("/api/v1/health/")
     assert r.status_code == 200 and r.json() == {"status": "ok", "database": "ok", "explanation_enabled": False,
-                                                 "api_version": 1}
+                                                 "google_login_enabled": False, "api_version": 1}
 
 
 def test_app_key_is_required_and_checked(client, app_key):

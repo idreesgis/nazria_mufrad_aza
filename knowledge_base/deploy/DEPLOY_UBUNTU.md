@@ -46,6 +46,7 @@ Set at least these values:
 | `DJANGO_ALLOWED_HOSTS` | Your public IP, then `,localhost,127.0.0.1` |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | `http://<your public IP>` |
 | `NAZRIA_DATABASE_URL` | The same database as the knowledge base |
+| `NAZRIA_GOOGLE_CLIENT_IDS` | Optional: the Google "Web application" OAuth client ID, for Sign in with Google (see `docs/API.md`). The server must reach `www.googleapis.com` over HTTPS to fetch Google's public keys. |
 
 The database must accept connections from this server, so add the server's IP to the database firewall or
 allowlist.
