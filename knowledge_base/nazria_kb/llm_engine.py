@@ -261,8 +261,33 @@ class RagResponder:
             fb.meta = {**meta, **fb.meta, "citation_missing": True}
             return fb
         meta["cited_chunk_ids"] = [p.chunk_id for p in cited if p.chunk_id is not None]
+        meta["body"] = text
+        meta["sources"] = [{"context": p.context, "volume": p.volume_no, "pages": list(p.pages),
+                            "citation": _page_ref(p.volume_no, p.pages), "chunk_id": p.chunk_id} for p in cited]
         sources = "ماخذ: " + "؛ ".join(f"«{p.context}» ({_page_ref(p.volume_no, p.pages)})" for p in cited)
         return Answer(text + "\n\n" + sources, "llm", meta)
+
+
+# --------------------------------------------------------------------------- explanation of a questionnaire result
+EXPLAIN_ASK = ("سوالنامے کے اس نتیجے اور میری شکایت کو کتاب کے اقتباسات کی روشنی میں آسان اردو میں سمجھائیں۔ "
+               "نسخہ دوبارہ نہ لکھیں۔")
+
+
+def explanation_context(s: Session) -> str:
+    """The questionnaire result, given to the model as context (rule-based, not a diagnosis)."""
+    res = s.result
+    lines = ["سوالنامے کا نتیجہ (قواعد پر مبنی، تشخیص نہیں):",
+             f"- مریض کی شکایت: {s.answers.get('complaint', '')}"]
+    if res.get("conclusive"):
+        lines.append(f"- غالب نظام: {res.get('primary_system')}؛ اندازاً تحریک: {res.get('tehreek') or '—'}")
+    else:
+        lines.append("- کوئی واضح تحریک ظاہر نہیں ہوئی۔")
+    return "\n".join(lines)
+
+
+def explanation_query(s: Session) -> str:
+    """Retrieval query for the explanation: the complaint plus the dominant system."""
+    return " ".join(x for x in (s.answers.get("complaint", ""), s.result.get("primary_system") or "") if x)
 
 
 # --------------------------------------------------------------------------- engines
@@ -448,17 +473,10 @@ class HybridEngine(_LLMEngineBase):
         return r
 
     def _context_note(self, s: Session) -> str:
-        res = s.result
-        lines = ["سوالنامے کا نتیجہ (قواعد پر مبنی، تشخیص نہیں):",
-                 f"- مریض کی شکایت: {s.answers.get('complaint', '')}"]
-        if res.get("conclusive"):
-            lines.append(f"- غالب نظام: {res.get('primary_system')}؛ اندازاً تحریک: {res.get('tehreek') or '—'}")
-        else:
-            lines.append("- کوئی واضح تحریک ظاہر نہیں ہوئی۔")
-        return "\n".join(lines)
+        return explanation_context(s)
 
     def _query_extra(self, s: Session) -> str:
-        return " ".join(x for x in (s.answers.get("complaint", ""), s.result.get("primary_system") or "") if x)
+        return explanation_query(s)
 
     def reply(self, s: Session, message: str) -> Reply:
         try:
@@ -498,8 +516,7 @@ class HybridEngine(_LLMEngineBase):
     def _explain(self, s: Session, r: Reply) -> Reply:
         """Questionnaire finished: keep its deterministic summary, add the LLM explanation, open follow-ups."""
         summary_entry = s.transcript[-1]
-        ask = ("سوالنامے کے اس نتیجے اور میری شکایت کو کتاب کے اقتباسات کی روشنی میں آسان اردو میں سمجھائیں۔ "
-               "نسخہ دوبارہ نہ لکھیں۔")
+        ask = EXPLAIN_ASK
         ans, err = self._respond(s, ask, context_note=self._context_note(s), query=self._query_extra(s) or ask)
         s.status, s.phase = "in_progress", "followup"
         if ans is None or ans.kind != "llm":
