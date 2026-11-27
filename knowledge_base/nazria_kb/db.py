@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -263,6 +264,12 @@ def seed_questionnaire(cur, questions: list[Question] = DEFAULT_QUESTIONS) -> No
                         (q.id, o.key, oi, o.label, Jsonb(o.weights), SOURCE_BOOK if o.pages else None, o.pages))
 
 
+def _json(value):
+    """jsonb as a Python object. Django's psycopg connection returns jsonb as text (Django decodes JSON itself),
+    a plain psycopg connection returns it decoded: accept both."""
+    return json.loads(value) if isinstance(value, (str, bytes)) else value
+
+
 def load_questions(conn: psycopg.Connection) -> list[Question]:
     """Active question bank from the DB (with any Hakeem edits); built-in defaults if not seeded."""
     try:
@@ -277,7 +284,7 @@ def load_questions(conn: psycopg.Connection) -> list[Question]:
     for qid, key, label, weights, pages in conn.execute(
             "SELECT question_id, option_key, label_ur, weights, source_pages FROM nazria.questionnaire_options "
             "ORDER BY question_id, ordinal"):
-        opts.setdefault(qid, []).append(Option(key, label, dict(weights), list(pages)))
+        opts.setdefault(qid, []).append(Option(key, label, dict(_json(weights) or {}), list(pages or [])))
     return [Question(qid, kind, text, stage, opts.get(qid, [])) for qid, kind, stage, text in qrows]
 
 
@@ -301,3 +308,34 @@ def save_session(conn: psycopg.Connection, session) -> None:
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                 (session.session_uid, i, m["role"], m["content"], m.get("question_id"), m.get("prompt_tokens"),
                  m.get("completion_tokens"), m.get("latency_ms"), [int(x) for x in m.get("source_chunk_ids") or []]))
+
+
+def load_session(conn: psycopg.Connection, session_uid: str):
+    """A stored consultation (answers, result, transcript with telemetry) or None."""
+    from .engine import Session
+    row = conn.execute("SELECT session_uid::text, engine, provider, model, status, answers, result, external_provider "
+                       "FROM nazria.consultation_sessions WHERE session_uid = %s", (session_uid,)).fetchone()
+    if row is None:
+        return None
+    uid, engine, provider, model, status, answers, result, external = row
+    transcript = []
+    for role, content, qid, pt, ct, lat, chunks in conn.execute(
+            "SELECT role, content, question_id, prompt_tokens, completion_tokens, latency_ms, source_chunk_ids "
+            "FROM nazria.consultation_messages WHERE session_uid = %s ORDER BY message_index", (session_uid,)):
+        m = {"role": role, "content": content, "question_id": qid}
+        for k, v in (("prompt_tokens", pt), ("completion_tokens", ct), ("latency_ms", lat)):
+            if v is not None:
+                m[k] = v
+        if chunks:
+            m["source_chunk_ids"] = list(chunks)
+        transcript.append(m)
+    return Session(session_uid=uid, engine=engine, provider=provider, model=model, status=status,
+                   answers=dict(_json(answers) or {}), result=dict(_json(result) or {}), transcript=transcript,
+                   external_provider=bool(external))
+
+
+def delete_session(conn: psycopg.Connection, session_uid: str) -> bool:
+    """Delete one consultation and its messages (the patient's request). True if it existed."""
+    with conn.transaction():
+        cur = conn.execute("DELETE FROM nazria.consultation_sessions WHERE session_uid = %s", (session_uid,))
+        return cur.rowcount > 0

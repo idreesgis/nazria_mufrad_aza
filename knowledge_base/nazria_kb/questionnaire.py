@@ -107,11 +107,12 @@ class Score:
     confidence: float           # 0..1, margin of the leader over the runner-up
     conclusive: bool
     evidence: list[tuple[str, str, str, list[int]]]   # (question text, answer label, system, pages)
+    evidence_keys: list[tuple[str, str]] = field(default_factory=list)   # (question id, option key), same order
 
 
 def score(questions: list[Question], answers: dict[str, object], min_points: int = 3) -> Score:
     totals = {s: 0 for s in SYSTEMS}
-    evidence = []
+    evidence, evidence_keys = [], []
     for q in questions:
         if q.stage != "signs" or q.id not in answers:
             continue
@@ -121,6 +122,7 @@ def score(questions: list[Question], answers: dict[str, object], min_points: int
                 for system, pts in opt.weights.items():
                     totals[system] += pts
                     evidence.append((q.text, opt.label, system, opt.pages))
+                    evidence_keys.append((q.id, opt.key))
     ranked = sorted(SYSTEMS, key=lambda s: (-totals[s], SYSTEMS.index(s)))
     total = sum(totals.values())
     lead, second = totals[ranked[0]], totals[ranked[1]]
@@ -129,4 +131,4 @@ def score(questions: list[Question], answers: dict[str, object], min_points: int
     secondary = ranked[1] if conclusive and second > 0 else None
     tehreek = f"{primary} {secondary}" if primary and secondary else None
     confidence = round((lead - second) / total, 2) if total else 0.0
-    return Score(totals, primary, secondary, tehreek, confidence, conclusive, evidence)
+    return Score(totals, primary, secondary, tehreek, confidence, conclusive, evidence, evidence_keys)

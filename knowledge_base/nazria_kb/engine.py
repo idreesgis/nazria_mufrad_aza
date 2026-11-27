@@ -22,7 +22,7 @@ from typing import Protocol
 from .dialogues import excerpt
 from .normalize import search_key, to_int
 from .providers import PROVIDERS  # noqa: F401  (re-exported for backward compatibility)
-from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, score
+from .questionnaire import DEFAULT_QUESTIONS, SYSTEM_ORGANS, TEHREEK_MIZAJ, Question, Score, score
 from .safety import (DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, VULNERABLE_NO_RECIPE, detect_red_flags,
                      emergency_message, hazard_flags, safe_for_patient)
 
@@ -269,74 +269,129 @@ class QuestionnaireEngine:
         return Reply(msg, done=True, data=s.result)
 
     def _finish(self, s: Session) -> Reply:
-        sc = score(self.questions, s.answers)
-        a = s.answers
-        vulnerable = a.get("age_group") in ("child", "elderly") or a.get("pregnancy") == "yes"
-        lines = ["شکریہ۔ آپ کے جوابات کی بنیاد پر:"]
-        if sc.conclusive:
-            lines.append(f"• غالب نظام: {sc.primary} ({SYSTEM_ORGANS[sc.primary]})")
-            if sc.tehreek:
-                lines.append(f"• اندازاً تحریک: «{sc.tehreek}» — مزاج: {TEHREEK_MIZAJ[sc.tehreek]}")
-            lines.append("• یہ نتیجہ ان علامات سے اخذ کیا گیا:")
-            for qtext, label, system, pages in sc.evidence:
-                shown = f"{qtext.rstrip('؟?')}: {label}" if label in ("ہاں", "نہیں") else label
-                lines.append(f"   - {shown} → {system} ({_pages_list(2, pages)})")
-        else:
-            lines.append("• آپ کے جوابات سے کوئی واضح تحریک ظاہر نہیں ہوتی۔ نبض اور قارورہ کا براہ راست معائنہ ضروری ہے۔")
-
-        hits = self.retriever.topics_for(a.get("complaint", ""), sc.primary)
-        hazards: list[str] = []
-        shown_topic = None
-        if hits:
-            h = hits[0]
-            shown_topic = h.topic_id
-            lines += ["", f"کتاب میں «{h.title}» کے بارے میں ({_page_ref(h.volume_no, h.pages)}):"]
-            by_role: dict[str, list[tuple[str, list[int]]]] = {}
-            for role, content, pages in h.sections:
-                by_role.setdefault(role, []).append((content, pages))
-            inline_recipe = None
-            for role in ("definition", "overview", "symptoms", "causes"):
-                if role in by_role:
-                    desc, inline_recipe = split_inline_recipe(by_role[role][0][0])
-                    shown = excerpt(desc, 450, 4)
-                    if safe_for_patient(shown, vulnerable):
-                        lines.append(shown)
-                    break
-            recipe = "\n".join([c for c, _ in by_role.get("recipe", [])] + ([inline_recipe] if inline_recipe else []))
-            if recipe:
-                hazards = hazard_flags(recipe)
-                if vulnerable:
-                    lines += ["", VULNERABLE_NO_RECIPE]
-                elif hazards:
-                    lines += ["", PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in hazards))]
-                else:
-                    lines += ["", "کتاب میں درج نسخہ:", excerpt(recipe, 500, 4)]
-                    if "dosage" in by_role and not inline_recipe:
-                        lines.append("مقدار خوراک: " + excerpt(by_role["dosage"][0][0], 250, 2))
-            if "diet" in by_role:
-                diet = excerpt(by_role["diet"][0][0], 400, 4)
-                if safe_for_patient(diet, vulnerable):
-                    lines += ["", "غذا کے بارے میں: " + diet]
-        else:
-            # passages are unvetted book text: they pass the same hazard / vulnerable-group checks as recipes
-            ps = [p for p in self.retriever.passages(a.get("complaint", ""), limit=4)
-                  if safe_for_patient(excerpt(p.content, 350, 3), vulnerable)][:2]
-            if ps:
-                lines += ["", "اس موضوع پر کتاب کے متعلقہ اقتباسات:"]
-                for p in ps:
-                    lines.append(f"«{p.context}» ({_page_ref(p.volume_no, p.pages)}): {excerpt(p.content, 350, 3)}")
-            else:
-                lines += ["", "کتاب میں اس تکلیف کے بارے میں کوئی واضح باب نہیں ملا۔"]
-        if a.get("duration") == "chronic":
-            lines += ["", "چونکہ تکلیف پرانی ہے، کسی مستند حکیم سے باقاعدہ معائنہ ضرور کروائیں۔"]
-        lines += ["", DISCLAIMER]
-        text = "\n".join(lines)
+        a = assess(self.questions, s.answers, self.retriever)
+        s.meta["assessment"] = a            # structured form for the REST API (not stored in the DB)
+        text = render_assessment(a)
         s.status = "completed"
-        s.result = {"outcome": "completed", "totals": sc.totals, "primary_system": sc.primary,
-                    "tehreek": sc.tehreek, "confidence": sc.confidence, "conclusive": sc.conclusive,
-                    "topic_id": shown_topic, "recipe_hazards": hazards, "vulnerable": vulnerable}
+        s.result = {"outcome": "completed", "totals": a.score.totals, "primary_system": a.score.primary,
+                    "tehreek": a.score.tehreek, "confidence": a.score.confidence, "conclusive": a.score.conclusive,
+                    "topic_id": a.topic.topic_id if a.topic else None, "recipe_hazards": a.hazards,
+                    "vulnerable": a.vulnerable}
         s.transcript.append({"role": "hakeem", "content": text, "question_id": None})
         return Reply(text, done=True, data=s.result)
+
+
+# --------------------------------------------------------------------------- assessment (shared by CLI and API)
+CHRONIC_ADVICE = "چونکہ تکلیف پرانی ہے، کسی مستند حکیم سے باقاعدہ معائنہ ضرور کروائیں۔"
+
+
+@dataclass
+class Assessment:
+    """Everything a finished questionnaire produces, before it is turned into text.
+
+    ``recipe_status``: ``shown`` | ``withheld_vulnerable`` | ``withheld_hazard`` | None (the chapter has no recipe).
+    ``passages`` is used only when no chapter matched the complaint: (passage, excerpt shown to the patient)."""
+    score: Score
+    vulnerable: bool
+    chronic: bool
+    topic: TopicHit | None = None
+    description: str | None = None
+    recipe_status: str | None = None
+    recipe: str | None = None
+    dosage: str | None = None
+    hazards: list[str] = field(default_factory=list)
+    diet: str | None = None
+    passages: list[tuple[Passage, str]] = field(default_factory=list)
+
+
+def is_vulnerable_answers(answers: dict) -> bool:
+    return answers.get("age_group") in ("child", "elderly") or answers.get("pregnancy") == "yes"
+
+
+def assess(questions: list[Question], answers: dict, retriever: Retriever) -> Assessment:
+    """Score the answers and pick what the book may show this patient (all safety filters applied here)."""
+    sc = score(questions, answers)
+    vulnerable = is_vulnerable_answers(answers)
+    a = Assessment(sc, vulnerable, answers.get("duration") == "chronic")
+    hits = retriever.topics_for(answers.get("complaint", ""), sc.primary)
+    if hits:
+        h = a.topic = hits[0]
+        by_role: dict[str, list[tuple[str, list[int]]]] = {}
+        for role, content, pages in h.sections:
+            by_role.setdefault(role, []).append((content, pages))
+        inline_recipe = None
+        for role in ("definition", "overview", "symptoms", "causes"):
+            if role in by_role:
+                desc, inline_recipe = split_inline_recipe(by_role[role][0][0])
+                shown = excerpt(desc, 450, 4)
+                if safe_for_patient(shown, vulnerable):
+                    a.description = shown
+                break
+        recipe = "\n".join([c for c, _ in by_role.get("recipe", [])] + ([inline_recipe] if inline_recipe else []))
+        if recipe:
+            a.hazards = hazard_flags(recipe)
+            if vulnerable:
+                a.recipe_status = "withheld_vulnerable"
+            elif a.hazards:
+                a.recipe_status = "withheld_hazard"
+            else:
+                a.recipe_status, a.recipe = "shown", excerpt(recipe, 500, 4)
+                if "dosage" in by_role and not inline_recipe:
+                    a.dosage = excerpt(by_role["dosage"][0][0], 250, 2)
+        if "diet" in by_role:
+            diet = excerpt(by_role["diet"][0][0], 400, 4)
+            if safe_for_patient(diet, vulnerable):
+                a.diet = diet
+    else:
+        # passages are unvetted book text: they pass the same hazard / vulnerable-group checks as recipes
+        for p in retriever.passages(answers.get("complaint", ""), limit=4):
+            ex = excerpt(p.content, 350, 3)
+            if safe_for_patient(ex, vulnerable):
+                a.passages.append((p, ex))
+            if len(a.passages) == 2:
+                break
+    return a
+
+
+def render_assessment(a: Assessment) -> str:
+    """The Urdu result text shown by the CLI (and returned by the API as ``text``)."""
+    sc = a.score
+    lines = ["شکریہ۔ آپ کے جوابات کی بنیاد پر:"]
+    if sc.conclusive:
+        lines.append(f"• غالب نظام: {sc.primary} ({SYSTEM_ORGANS[sc.primary]})")
+        if sc.tehreek:
+            lines.append(f"• اندازاً تحریک: «{sc.tehreek}» — مزاج: {TEHREEK_MIZAJ[sc.tehreek]}")
+        lines.append("• یہ نتیجہ ان علامات سے اخذ کیا گیا:")
+        for qtext, label, system, pages in sc.evidence:
+            shown = f"{qtext.rstrip('؟?')}: {label}" if label in ("ہاں", "نہیں") else label
+            lines.append(f"   - {shown} → {system} ({_pages_list(2, pages)})")
+    else:
+        lines.append("• آپ کے جوابات سے کوئی واضح تحریک ظاہر نہیں ہوتی۔ نبض اور قارورہ کا براہ راست معائنہ ضروری ہے۔")
+    if a.topic:
+        h = a.topic
+        lines += ["", f"کتاب میں «{h.title}» کے بارے میں ({_page_ref(h.volume_no, h.pages)}):"]
+        if a.description:
+            lines.append(a.description)
+        if a.recipe_status == "withheld_vulnerable":
+            lines += ["", VULNERABLE_NO_RECIPE]
+        elif a.recipe_status == "withheld_hazard":
+            lines += ["", PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in a.hazards))]
+        elif a.recipe_status == "shown":
+            lines += ["", "کتاب میں درج نسخہ:", a.recipe]
+            if a.dosage:
+                lines.append("مقدار خوراک: " + a.dosage)
+        if a.diet:
+            lines += ["", "غذا کے بارے میں: " + a.diet]
+    elif a.passages:
+        lines += ["", "اس موضوع پر کتاب کے متعلقہ اقتباسات:"]
+        for p, ex in a.passages:
+            lines.append(f"«{p.context}» ({_page_ref(p.volume_no, p.pages)}): {ex}")
+    else:
+        lines += ["", "کتاب میں اس تکلیف کے بارے میں کوئی واضح باب نہیں ملا۔"]
+    if a.chronic:
+        lines += ["", CHRONIC_ADVICE]
+    lines += ["", DISCLAIMER]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- configuration
