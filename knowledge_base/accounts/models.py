@@ -22,6 +22,8 @@ class PatientProfile(models.Model):
     birth_year = models.PositiveSmallIntegerField(null=True, blank=True)
     consent_at = models.DateTimeField(null=True, blank=True, help_text="when the patient accepted the disclaimer")
     consent_version = models.CharField(max_length=20, blank=True)
+    language = models.CharField(max_length=2, choices=[("ur", "اردو"), ("en", "English"), ("ar", "العربية")],
+                                default="ur", help_text="language of the app's texts for this user")
     created_at = models.DateTimeField(default=timezone.now, editable=False)
 
     class Meta:

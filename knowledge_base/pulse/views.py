@@ -18,8 +18,9 @@ from consultations.models import Consultation
 from consultations.serializers import ErrorOut
 
 from .models import PulseAnalysis
+from nazria_api.language import request_language
 from .serializers import PulseAnalysisOut, PulseUploadIn
-from .service import DISCLAIMER, run_analysis
+from .service import run_analysis
 
 SYMPTOM_SUGGESTIONS = {
     "general": ["Fatigue and lethargy", "Feeling of internal heat", "Feeling cold internally", "Excessive sweating",
@@ -36,8 +37,13 @@ SYMPTOM_SUGGESTIONS = {
 }
 
 
-def out(a: PulseAnalysis) -> dict:
-    return {**PulseAnalysisOut(a).data, "disclaimer": DISCLAIMER}
+def out(a: PulseAnalysis, lang: str = "ur") -> dict:
+    from nazria_kb.i18n import DIRECTION
+
+    from .i18n import DISCLAIMER as DISCLAIMERS, error_text, summary
+    return {**PulseAnalysisOut(a).data, "error": error_text(a.error, lang), "error_en": a.error,
+            "summary": summary(a.result, lang), "language": lang, "direction": DIRECTION[lang],
+            "disclaimer": DISCLAIMERS[lang]}
 
 
 def visible(request):
@@ -72,7 +78,7 @@ class PulseListCreateView(generics.ListAPIView):
 
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.get_queryset())
-        return self.get_paginated_response([out(a) for a in page])
+        return self.get_paginated_response([out(a, request_language(request)) for a in page])
 
     @extend_schema(request={"multipart/form-data": PulseUploadIn}, responses={201: PulseAnalysisOut, 400: ErrorOut})
     def post(self, request):
@@ -106,7 +112,7 @@ class PulseListCreateView(generics.ListAPIView):
         audit(request, "pulse.upload", "pulse_analysis", a.id, method=a.method, status=a.status,
               size_kb=a.video_size // 1024, consultation=str(consultation.pk) if consultation else None,
               patient=str(patient.id))
-        return Response(out(a), status=status.HTTP_201_CREATED)
+        return Response(out(a, request_language(request)), status=status.HTTP_201_CREATED)
 
 
 class PulseDetailView(APIView):
@@ -121,7 +127,7 @@ class PulseDetailView(APIView):
         if a is None:
             return Response({"error": "not_found", "detail": "no such pulse analysis"}, status=404)
         audit(request, "pulse.view", "pulse_analysis", a.id)
-        return Response(out(a))
+        return Response(out(a, request_language(request)))
 
     @extend_schema(responses={204: None, 404: ErrorOut})
     def delete(self, request, pk):

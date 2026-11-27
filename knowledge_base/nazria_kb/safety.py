@@ -33,14 +33,35 @@ KUSHTA_RE = re.compile(r"(?:^|\s)(?:کشتہ|کشتۂ|کشتے|کشتوں|کشت
 _HAZ_RE = re.compile(r"(?:^|\s)(" + "|".join(sorted(map(re.escape, HAZARDOUS_INGREDIENTS), key=len, reverse=True)) + r")(?=\s|$)")
 
 
+# English and Arabic names (AI explanations in those languages), matched on ml_key() text
+HAZARDOUS_INGREDIENTS_ML: dict[str, str] = {
+    "arsenic": "arsenic", "زرنيخ": "arsenic", "الزرنيخ": "arsenic", "mercury": "mercury", "cinnabar": "mercury",
+    "quicksilver": "mercury", "زئبق": "mercury", "الزئبق": "mercury", "زنجفر": "mercury", "الزنجفر": "mercury",
+    "copper sulphate": "copper_sulphate", "copper sulfate": "copper_sulphate", "blue vitriol": "copper_sulphate",
+    "كبريتات النحاس": "copper_sulphate", "lead oxide": "lead", "litharge": "lead", "red lead": "lead",
+    "مرتك": "lead", "سيلقون": "lead", "aconite": "aconite", "aconitum": "aconite", "خانق الذئب": "aconite",
+    "nux vomica": "strychnine", "strychnine": "strychnine", "جوز القيء": "strychnine", "جوز القي": "strychnine",
+    "ستركنين": "strychnine", "datura": "datura", "thorn apple": "datura", "داتوره": "datura", "الداتوره": "datura",
+    "opium": "opium", "افيون": "opium", "الافيون": "opium", "cannabis": "cannabis", "hashish": "cannabis",
+    "bhang": "cannabis", "حشيش": "cannabis", "الحشيش": "cannabis", "قنب": "cannabis", "القنب": "cannabis",
+    "henbane": "henbane", "بنج": "henbane", "البنج": "henbane", "croton": "croton", "حب الملوك": "croton",
+    "oleander": "oleander", "دفلي": "oleander", "الدفلي": "oleander", "hemlock": "hemlock", "شوكران": "hemlock",
+    "الشوكران": "hemlock", "kushta": "kushta", "calcined metal": "kushta", "calx": "kushta", "كشته": "kushta",
+}
+# Arabic attaches و ف ب ل ك (and, so, with, for, like) and ال (the) to the word: «والأفيون» is «and the opium»
+_HAZ_ML_RE = re.compile(r"(?<!\w)(?:[وفبلك]?(?:ال)?)(" + "|".join(sorted(map(re.escape, HAZARDOUS_INGREDIENTS_ML), key=len,
+                                                                      reverse=True)) + r")(?!\w)")
+
+
 def hazard_flags(text: str) -> list[str]:
-    """Hazard codes found in a recipe/turn text, e.g. ['arsenic', 'kushta']."""
+    """Hazard codes found in a recipe/turn text (Urdu, English or Arabic), e.g. ['arsenic', 'kushta']."""
     if not text:
         return []
     key = search_key(text)
     flags = {HAZARDOUS_INGREDIENTS[m.group(1)] for m in _HAZ_RE.finditer(key)}
     if KUSHTA_RE.search(key):
         flags.add("kushta")
+    flags |= {HAZARDOUS_INGREDIENTS_ML[m.group(1)] for m in _HAZ_ML_RE.finditer(ml_key(text))}
     return sorted(flags)
 
 
@@ -122,17 +143,69 @@ _RF_TEXT: list[tuple[str, str]] = [
 ]
 _RF_TEXT_RE = [(code, re.compile(pat, re.IGNORECASE)) for code, pat in _RF_TEXT]
 
+# English and Arabic, matched on ml_key() text (lower case, Arabic letter variants and diacritics unified).
+_RF_TEXT_ML: list[tuple[str, str]] = [
+    ("chest_pain", r"chest (?:\w+ ){0,2}(?:pain|pressure|tightness)|pain in (?:my |the )?chest|heart attack|"
+                   r"(?:الم|وجع|ضغط) (?:\S+ ){0,2}(?:في )?(?:ال)?صدر|نوبه قلبيه|ذبحه صدريه"),
+    ("breathing", r"(?:can ?not|can.?t|cannot|unable to|hard to|difficult(?:y)?(?: to)?|trouble|struggling to) ?(?:\w+ )?breath|"
+                  r"short(?:ness)? of breath|not breathing|choking|"
+                  r"(?:صعوبه|ضيق) (?:\S+ ){0,1}(?:في )?التنفس|لا (?:استطيع|اقدر) (?:ان )?(?:اتنفس|التنفس)|اختناق"),
+    ("unconscious", r"unconscious|faint(?:ed|ing)|passed out|seizure|convuls|(?:having|had|has) (?:a )?fits?\b|"
+                    r"(?:فقد|فقدان) (?:ال)?وعي|اغماء|اغمي|غيبوبه|نوبه صرع|تشنج"),
+    ("stroke", r"stroke|face (?:is )?droop|sudden(?:ly)? (?:\w+ ){0,3}(?:weak|numb|paraly|can.?t speak|slurr)|"
+               r"سكته دماغيه|جلطه دماغيه|تدلي الوجه|شلل مفاجئ|ضعف مفاجئ|صعوبه (?:مفاجئه )?في الكلام"),
+    ("bleeding", r"vomit(?:ing|ed)? (?:\w+ )?blood|blood in (?:my |the )?(?:stool|vomit)|black stool|coughing (?:up )?blood|"
+                 r"bleeding (?:heavily|a lot|won.?t stop)|heavy bleeding|"
+                 r"(?:تقيؤ|قيء|استفراغ) (?:ال)?دم|دم في (?:ال)?براز|براز اسود|(?:سعال|كحه) (?:مع )?دم|نزيف (?:شديد|حاد|لا يتوقف)"),
+    ("fever_neck", r"stiff neck|neck (?:is )?stiff|تيبس (?:في )?الرقبه|تصلب الرقبه"),
+    ("pregnancy_emergency", r"pregnan\w* (?:\w+ ){0,6}(?:bleed|severe pain)|(?:bleed\w*|severe pain) (?:\w+ ){0,4}pregnan|"
+                            r"حامل (?:\S+ ){0,4}(?:نزيف|ألم شديد|الم شديد)|نزيف (?:\S+ ){0,3}(?:ال)?حمل"),
+    ("child_fever", r"(?:baby|infant|newborn|toddler|child) (?:\w+ ){0,4}(?:high fever|dehydrat|unconscious)|"
+                    r"(?:رضيع|مولود|طفل\S*) (?:\S+ ){0,4}(?:حمي شديده|حرار\S* عاليه|حمي عاليه|جفاف)"),
+    ("self_harm", r"suicid|kill myself|end my life|want to die|harm myself|hurt myself|"
+                  r"انتحار|اقتل نفسي|انهي حياتي|اريد ان اموت|اذيه نفسي|اؤذي نفسي"),
+    ("poisoning", r"poison|overdose|swallowed (?:\w+ ){0,3}(?:pills|tablets|chemical)|"
+                  r"تسمم|سم |جرعه زائده|ابتلع (?:\S+ ){0,3}(?:حبوب|اقراص)"),
+    ("severe_headache", r"(?:sudden|worst) (?:\w+ ){0,3}headache|thunderclap|صداع (?:مفاجئ|شديد جدا)|اسوا صداع"),
+    ("allergy_swelling", r"(?:face|lips?|tongue|throat) (?:\w+ ){0,2}swell(?:ing|ed)?|anaphyla|"
+                         r"تورم (?:ال)?(?:وجه|شفتين|شفه|لسان|حلق)|حساسيه شديده"),
+    ("severe_abdominal_pain", r"(?:severe|unbearable|intense) (?:\w+ ){0,2}(?:abdominal|stomach|belly) pain|"
+                              r"الم (?:شديد|حاد) في (?:ال)?(?:بطن|معده)"),
+]
+_RF_TEXT_ML_RE = [(code, re.compile(pat, re.IGNORECASE)) for code, pat in _RF_TEXT_ML]
+_AR_DIACRITICS = re.compile(r"[\u064B-\u0652\u0670\u0640]")
+
+
+def ml_key(text: str) -> str:
+    """English/Arabic matching form: lower case, no Arabic diacritics or tatweel, أ إ آ → ا, ى ی → ي, ة → ه,
+    ک → ك, one space between words."""
+    t = _AR_DIACRITICS.sub("", (text or "").lower())
+    t = re.sub("[أإآ]", "ا", t).replace("ى", "ي").replace("ی", "ي").replace("ة", "ه").replace("ک", "ك")
+    return " " + re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", t)).strip() + " "
+
 
 def detect_red_flags(text: str) -> list[str]:
-    """Emergency codes found in a free-text patient message (empty list = none)."""
+    """Emergency codes found in a free-text patient message in Urdu, English or Arabic (empty list = none)."""
     if not text:
         return []
-    key = search_key(text)
-    return [code for code, rx in _RF_TEXT_RE if rx.search(key)]
+    key, ml = search_key(text), ml_key(text)
+    found = [code for code, rx in _RF_TEXT_RE if rx.search(key)]
+    found += [code for code, rx in _RF_TEXT_ML_RE if rx.search(ml) and code not in found]
+    order = [c for c, _ in _RF_TEXT]
+    return sorted(found, key=order.index)
 
 
-def emergency_message(codes: list[str]) -> str:
-    return SELF_HARM_MESSAGE if "self_harm" in codes else EMERGENCY_MESSAGE
+# Urdu labels of the free-text-only emergency codes (the others are the RED_FLAGS options)
+TEXT_FLAG_LABELS = {
+    "poisoning": "زہر یا دوا کی زیادہ مقدار کھا لینا", "severe_headache": "اچانک شدید سر درد",
+    "allergy_swelling": "چہرے، ہونٹوں یا گلے کی سوجن کے ساتھ سانس کی دشواری",
+    "severe_abdominal_pain": "پیٹ میں شدید درد",
+}
+
+
+def emergency_message(codes: list[str], lang: str = "ur") -> str:
+    from .i18n import tr
+    return tr(SELF_HARM_MESSAGE if "self_harm" in codes else EMERGENCY_MESSAGE, lang)
 
 
 # --------------------------------------------------------------------------- output guards
@@ -142,9 +215,14 @@ RECIPE_LIKE_RE = re.compile(
     r"\d+\s*(?:تولہ|تولے|ماشہ|ماشے|رتی|گرام|ملی|چمچ|چمچہ|عدد|حصہ|حصے|سیر|چھٹانک)")
 
 
+RECIPE_LIKE_ML_RE = re.compile(
+    r"recipe|ingredients|preparation|grind (?:them|together)|\d+\s*(?:g|gm|grams?|mg|ml|tsp|teaspoons?|tbsp|"
+    r"tablespoons?|parts?|tola|masha|ratti)\b|وصفه|مكونات|طريقه التحضير|\d+\s*(?:غرام|جرام|ملغ|مل|ملعقه|جزء)")
+
+
 def looks_like_recipe(text: str) -> bool:
     return bool(text) and bool(RECIPE_LIKE_RE.search(search_key(text).replace("۔", " ")) or
-                               RECIPE_LIKE_RE.search(text))
+                               RECIPE_LIKE_RE.search(text) or RECIPE_LIKE_ML_RE.search(ml_key(text)))
 
 
 def safe_for_patient(text: str, vulnerable: bool) -> bool:
@@ -152,7 +230,7 @@ def safe_for_patient(text: str, vulnerable: bool) -> bool:
     return not hazard_flags(text) and not (vulnerable and looks_like_recipe(text))
 
 
-def guard_answer(text: str, vulnerable: bool) -> tuple[str, dict]:
+def guard_answer(text: str, vulnerable: bool, lang: str = "ur") -> tuple[str, dict]:
     """Post-check a generated answer paragraph by paragraph.
 
     * a paragraph with a hazardous ingredient is removed and replaced by the practitioner-only notice
@@ -172,10 +250,12 @@ def guard_answer(text: str, vulnerable: bool) -> tuple[str, dict]:
             removed += 1
             continue
         kept.append(p)
+    from .i18n import sep, tr
     if hazards:
-        kept.append(PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR.get(x, x) for x in sorted(hazards))))
+        kept.append(tr(PRACTITIONER_ONLY, lang).format(
+            items=sep(lang).join(tr(HAZARD_NAMES_UR.get(x, x), lang) for x in sorted(hazards))))
     if vuln_removed:
-        kept.append(VULNERABLE_NO_RECIPE)
+        kept.append(tr(VULNERABLE_NO_RECIPE, lang))
     return "\n".join(kept), {"hazards": sorted(hazards), "removed_paragraphs": removed,
                              "vulnerable_recipe_removed": vuln_removed}
 

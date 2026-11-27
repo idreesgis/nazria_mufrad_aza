@@ -40,7 +40,8 @@ def test_finger_video_is_analysed_and_kept_in_history(api, tmp_path, settings):
     r = upload(api, finger_video(tmp_path), symptoms='["Headaches", "Insomnia"]')
     assert r.status_code == 201, r.data
     assert r.data["status"] == "completed" and 66 <= r.data["result"]["average_heart_rate_bpm"] <= 80
-    assert r.data["symptoms"] == ["Headaches", "Insomnia"] and "experimental" in r.data["disclaimer"]
+    assert r.data["symptoms"] == ["Headaches", "Insomnia"] and "تجرباتی" in r.data["disclaimer"]
+    assert "Hakeem" not in r.data["disclaimer"] and "حکیم" not in r.data["disclaimer"]
     a = PulseAnalysis.objects.get(pk=r.data["id"])
     assert a.account == api.user and a.patient == api.patient and a.video.name.startswith("pulse/") and "pulse.mp4" not in a.video.name
     assert api.get("/api/v1/pulse/analyses/").data["count"] == 1
@@ -51,7 +52,8 @@ def test_finger_video_is_analysed_and_kept_in_history(api, tmp_path, settings):
 def test_unreadable_video_fails_with_a_safe_message(api):
     r = upload(api, b"not a video at all")
     assert r.status_code == 201 and r.data["status"] == "failed" and r.data["result"] == {}
-    assert r.data["error"] == "the video file could not be read" and "/" not in r.data["error"]
+    assert r.data["error_en"] == "the video file could not be read" and "/" not in r.data["error_en"]
+    assert r.data["error"] == "ویڈیو فائل پڑھی نہیں جا سکی"
 
 
 @pytest.mark.parametrize("name,size_mb,expected", [("pulse.exe", 0, "unsupported file type"),

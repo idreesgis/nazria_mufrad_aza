@@ -99,9 +99,10 @@ def test_reference_consultation_matches_the_cli(api, kb):
     d = r.data
     a = d["assessment"]
     assert d["status"] == "completed" and d["emergency"] is None
-    assert a["primary_system"] == "عضلاتی" and a["totals"] == {"اعصابی": 0, "عضلاتی": 8, "غدی": 0} and a["conclusive"]
+    assert a["primary_system"] == "عضلاتی" and a["totals"] == {"nervous": 0, "muscular": 8, "glandular": 0} and a["conclusive"]
+    assert a["primary_system_code"] == "muscular" and d["language"] == "ur" and d["direction"] == "rtl"
     assert a["evidence"][0] == {"question_id": "urine_color", "option_key": "red", "question": a["evidence"][0]["question"],
-                                "answer": "سرخ یا سرخی مائل", "system": "عضلاتی"}
+                                "answer": "سرخ یا سرخی مائل", "system": "عضلاتی", "system_code": "muscular"}
     book = d["book"]
     assert book["topic"] == {"id": 1603, "title": "عضلاتی قبض"}
     assert book["recipe"]["status"] == "shown" and "سناکی" in book["recipe"]["text"]
@@ -284,7 +285,7 @@ def test_vol1_signs_are_scored(api):
     r = create(api, answers)
     assert r.status_code == 201, r.data
     a = r.data["assessment"]
-    assert a["totals"] == {"اعصابی": 1, "عضلاتی": 11, "غدی": 0}
+    assert a["totals"] == {"nervous": 1, "muscular": 11, "glandular": 0}
     ev = {(e["question_id"], e["option_key"]): e for e in a["evidence"]}
     assert ev[("joints", "sharp_pain")]["system"] == "عضلاتی" and "citation" not in ev[("joints", "sharp_pain")]
     assert "(نقرس)" in ev[("joints", "sharp_pain")]["answer"] and "صفحہ" not in r.data["text"]
@@ -315,3 +316,78 @@ def test_emergency_has_no_diet_plan_and_diabetes_adds_a_note(api):
     p = make_patient(api.user, "Abba", relation="parent", birth_year=1970, chronic_conditions=["diabetes"])
     r = create(api, {**REFERENCE, "thirst": "unquenched"}, patient=p)
     assert any("شوگر" in n for n in r.data["diet_plans"][0]["notes"])
+
+
+# ---------------------------------------------------------------- languages
+URDU_ONLY = __import__("re").compile(r"[ٹڈڑںھہےۓ]")
+
+
+def test_questionnaire_in_three_languages(anon):
+    en = anon.get("/api/v1/questionnaire/?lang=en").data
+    ar = anon.get("/api/v1/questionnaire/", HTTP_ACCEPT_LANGUAGE="ar-SA,ar;q=0.9").data
+    ur = anon.get("/api/v1/questionnaire/").data
+    assert (en["language"], en["direction"], ar["language"], ar["direction"], ur["language"]) == \
+        ("en", "ltr", "ar", "rtl", "ur")
+    assert en["questions"][2]["text"] == "How long have you had this complaint?"
+    assert ar["questions"][2]["text"] == "منذ متى وأنت تعاني من هذه الشكوى؟"
+    assert [q["id"] for q in en["questions"]] == [q["id"] for q in ur["questions"]]           # same keys
+    assert not any(URDU_ONLY.search(q["text"]) for q in en["questions"] + ar["questions"])
+    assert len({en["version"], ar["version"], ur["version"]}) == 3
+    r = anon.get("/api/v1/questionnaire/?lang=en")
+    assert r["Content-Language"] == "en"
+
+
+def test_result_in_english_and_arabic_and_switching_language(api):
+    r = api.post("/api/v1/consultations/?lang=en", {"answers": {**REFERENCE, "thirst": "unquenched"},
+                                                    "patient_id": str(api.patient.id)}, format="json")
+    d = r.data
+    assert d["language"] == "en" and d["assessment"]["primary_system"] == "Muscular"
+    assert d["assessment"]["tehreek"] == "Muscular-Glandular" and d["assessment"]["mizaj"] == "dry and hot"
+    assert d["assessment"]["evidence"][0]["answer"] == "Red or reddish" and d["book"]["language"] == "ur"
+    assert d["diet_plans"][0]["qehwa"]["name"] == "carom (ajwain) qehwa" and "pine nuts" in d["diet_plans"][0]["dry_fruits"]
+    assert d["text"].startswith("Thank you. Based on your answers:") and "Diet plan:" in d["text"]
+    assert "original text in Urdu" in d["text"] and "qualified practitioner" in d["disclaimer"]
+    ar = api.get(f"/api/v1/consultations/{d['id']}/", HTTP_ACCEPT_LANGUAGE="ar").data      # same result, Arabic
+    assert ar["assessment"]["primary_system"] == "عضلي" and ar["text"].startswith("شكرًا لك") and ar["direction"] == "rtl"
+    assert ar["assessment"]["totals"] == d["assessment"]["totals"]
+    hist = api.get("/api/v1/consultations/?lang=en").data["results"][0]
+    assert hist["primary_system"] == "Muscular" and hist["primary_system_code"] == "muscular"
+
+
+def test_users_saved_language_is_used(api):
+    assert api.patch("/api/v1/me/", {"language": "ar"}, format="json").data["language"] == "ar"
+    assert api.get("/api/v1/patients/intake-form/").data["language"] == "ar"
+    assert api.get("/api/v1/patients/intake-form/").data["fields"][0]["label"] == "اسم المريض"
+    assert api.get("/api/v1/patients/intake-form/?lang=en").data["fields"][0]["label"] == "Patient's name"
+
+
+def test_triage_in_english_and_arabic(anon):
+    r = anon.post("/api/v1/triage/?lang=en", {"red_flags": ["none"], "complaint": "I cannot breathe"}, format="json")
+    assert r.data["emergency"] and r.data["flags"] == ["breathing"] and "emergency department" in r.data["message"]
+    assert r.data["flag_labels"] == ["Severe difficulty breathing"]
+    r = anon.post("/api/v1/triage/?lang=ar", {"red_flags": ["none"], "complaint": "ألم شديد في الصدر"}, format="json")
+    assert r.data["emergency"] and "الطوارئ" in r.data["message"]
+
+
+def test_english_complaint_finds_the_urdu_topic(api):
+    r = create(api, {**REFERENCE, "complaint": "chronic constipation for years"})
+    assert r.data["book"]["topic"]["title"] == "عضلاتی قبض"
+
+
+def test_emergency_result_in_english(api):
+    r = api.post("/api/v1/consultations/?lang=en", {"answers": {"red_flags": ["chest_pain"]}}, format="json")
+    assert r.data["status"] == "emergency" and r.data["text"].startswith("The symptom you described")
+
+
+def test_explanation_in_english(api, kb, monkeypatch):
+    monkeypatch.setenv("NAZRIA_ENGINE", "hybrid")
+    fp = FakeProvider(["Muscular constipation is often severe and long-standing (جلد دوم، صفحہ 127). "
+                       "Please see a qualified practitioner for a pulse and urine examination."], name="local", model="m")
+    services.set_provider(fp)
+    r = create(api)
+    e = api.post(f"/api/v1/consultations/{r.data['id']}/explanation/?lang=en").data
+    assert e["status"] == "shown" and e["language"] == "en" and e["text"].startswith("Muscular constipation")
+    assert "صفحہ" not in e["text"] and "جلد" not in e["text"]
+    assert "English" in fp.calls[0]["messages"][0]["content"]                     # the model was asked for English
+    ur = api.post(f"/api/v1/consultations/{r.data['id']}/explanation/").data       # Urdu is a separate explanation
+    assert len(fp.calls) == 2 and ur["language"] == "ur"

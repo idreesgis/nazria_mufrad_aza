@@ -17,6 +17,7 @@ from consultations.serializers import ErrorOut
 from . import serializers as S
 from .intake import intake_payload
 from .models import Patient, record_revision
+from nazria_api.language import request_language
 
 
 def own_patients(request):
@@ -55,7 +56,7 @@ class IntakeFormView(APIView):
 
     @extend_schema(responses={200: S.IntakeFormOut})
     def get(self, request):
-        return Response(intake_payload())
+        return Response(intake_payload(request_language(request)))
 
 
 class PatientListCreateView(generics.ListAPIView):

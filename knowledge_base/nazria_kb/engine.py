@@ -370,50 +370,56 @@ def assess(questions: list[Question], answers: dict, retriever: Retriever, condi
 _RECIPE_LEAD = re.compile(r"^[•\-\s]*نسخہ\s*[:：]\s*")     # the recipe heading is added when shown
 
 
-def render_assessment(a: Assessment) -> str:
-    """The Urdu result text shown by the CLI (and returned by the API as ``text``)."""
+def render_assessment(a: Assessment, lang: str = "ur") -> str:
+    """The result text shown by the CLI (Urdu) and returned by the API as ``text`` (ur | en | ar).
+    Book excerpts stay in the original Urdu; their headings say so in English and Arabic."""
+    from .i18n import msg, option_label, question_text, sep, system_name, tehreek_name, tr
     sc = a.score
-    lines = ["شکریہ۔ آپ کے جوابات کی بنیاد پر:"]
+    lines = [msg("thanks", lang)]
     if sc.conclusive:
-        lines.append(f"• غالب نظام: {sc.primary} ({SYSTEM_ORGANS[sc.primary]})")
+        lines.append(msg("primary", lang, system=system_name(sc.primary, lang), organs=tr(SYSTEM_ORGANS[sc.primary], lang)))
         if sc.tehreek:
-            lines.append(f"• اندازاً تحریک: «{sc.tehreek}» — مزاج: {TEHREEK_MIZAJ[sc.tehreek]}")
-        lines.append("• یہ نتیجہ ان علامات سے اخذ کیا گیا:")
-        for qtext, label, system, _pages in sc.evidence:
-            shown = f"{qtext.rstrip('؟?')}: {label}" if label in ("ہاں", "نہیں") else label
-            lines.append(f"   - {shown} → {system}")
+            lines.append(msg("tehreek", lang, tehreek=tehreek_name(sc.tehreek, lang),
+                             mizaj=tr(TEHREEK_MIZAJ[sc.tehreek], lang)))
+        lines.append(msg("evidence_head", lang))
+        keys = sc.evidence_keys or [(None, None)] * len(sc.evidence)
+        for (qtext, label, system, _pages), (qid, key) in zip(sc.evidence, keys):
+            q, lb = question_text(qid, qtext, lang), option_label(qid, key, label, lang)
+            shown = f"{q.rstrip('؟?')}: {lb}" if label in ("ہاں", "نہیں") else lb
+            lines.append(f"   - {shown} → {system_name(system, lang)}")
     else:
-        lines.append("• آپ کے جوابات سے کوئی واضح تحریک ظاہر نہیں ہوتی۔ نبض اور قارورہ کا براہ راست معائنہ ضروری ہے۔")
+        lines.append(msg("inconclusive", lang))
     if a.topic:
         h = a.topic
-        lines += ["", f"«{h.title}» کے بارے میں:"]
+        lines += ["", msg("topic", lang, title=h.title)]
         if a.description:
             lines.append(a.description)
         if a.recipe_status == "withheld_vulnerable":
-            lines += ["", VULNERABLE_NO_RECIPE]
+            lines += ["", tr(VULNERABLE_NO_RECIPE, lang)]
         elif a.recipe_status == "withheld_condition":
-            lines += ["", CONDITION_NO_RECIPE]
+            lines += ["", tr(CONDITION_NO_RECIPE, lang)]
         elif a.recipe_status == "withheld_hazard":
-            lines += ["", PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in a.hazards))]
+            lines += ["", tr(PRACTITIONER_ONLY, lang).format(
+                items=sep(lang).join(tr(HAZARD_NAMES_UR[x], lang) for x in a.hazards))]
         elif a.recipe_status == "shown":
-            lines += ["", "نسخہ:", a.recipe]
+            lines += ["", msg("recipe", lang), a.recipe]
             if a.dosage:
-                lines.append("مقدار خوراک: " + a.dosage)
+                lines.append(msg("dosage", lang) + a.dosage)
         if a.diet:
-            lines += ["", "اس تکلیف میں غذا کے بارے میں: " + a.diet]
+            lines += ["", msg("topic_diet", lang) + a.diet]
     elif a.passages:
-        lines += ["", "اس موضوع پر متعلقہ معلومات:"]
+        lines += ["", msg("passages", lang)]
         for p, ex in a.passages:
             lines.append(f"«{passage_title(p.context)}»: {ex}")
     else:
-        lines += ["", "اس تکلیف کے بارے میں کوئی واضح معلومات نہیں ملیں۔"]
+        lines += ["", msg("nothing_found", lang)]
     if a.chronic:
-        lines += ["", CHRONIC_ADVICE]
+        lines += ["", tr(CHRONIC_ADVICE, lang)]
     if a.caution:
-        lines += ["", MEDICATION_ADVICE]
+        lines += ["", tr(MEDICATION_ADVICE, lang)]
     if a.diet_plans:
-        lines += ["", render_plans(a.diet_plans)]
-    lines += ["", DISCLAIMER]
+        lines += ["", render_plans(a.diet_plans, lang)]
+    lines += ["", tr(DISCLAIMER, lang)]
     return "\n".join(lines)
 
 

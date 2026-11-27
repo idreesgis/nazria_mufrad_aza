@@ -112,6 +112,8 @@ class IntakeFieldOut(serializers.Serializer):
 
 class IntakeFormOut(serializers.Serializer):
     version = serializers.CharField()
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"])
+    direction = serializers.ChoiceField(choices=["rtl", "ltr"])
     fields = IntakeFieldOut(many=True)
     prefills = serializers.DictField(child=serializers.CharField())
 

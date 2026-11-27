@@ -21,6 +21,7 @@ from .models import CONSENT_VERSION, PatientProfile, SocialAccount, role_of
 from .permissions import HasAppKey
 from .phone import normalize_phone
 from .throttles import AuthRateThrottle
+from nazria_api.language import request_language
 
 User = get_user_model()
 
@@ -31,7 +32,7 @@ def profile_of(user) -> dict:
             "full_name": p.full_name if p else user.get_full_name(),
             "gender": p.gender if p else "", "birth_year": p.birth_year if p else None, "role": role_of(user),
             "consent_at": p.consent_at if p else None, "created_at": p.created_at if p else user.date_joined,
-            "has_password": user.has_usable_password(),
+            "has_password": user.has_usable_password(), "language": (p.language if p else None) or "ur",
             "linked_providers": sorted(SocialAccount.objects.filter(user=user).values_list("provider", flat=True))}
 
 
@@ -56,7 +57,8 @@ class RegisterView(APIView):
             user = User.objects.create_user(username=d["phone"], password=d["password"])
             PatientProfile.objects.create(user=user, phone=d["phone"], full_name=d.get("full_name") or "",
                                           gender=d.get("gender") or "", birth_year=d.get("birth_year"),
-                                          consent_at=timezone.now(), consent_version=CONSENT_VERSION)
+                                          consent_at=timezone.now(), consent_version=CONSENT_VERSION,
+                                          language=d.get("language") or request_language(request))
         audit(request, "auth.register", "user", user.pk, consent_version=CONSENT_VERSION)
         request._request.audit_user = user
         return Response(tokens_for(user), status=status.HTTP_201_CREATED)
@@ -250,7 +252,8 @@ class GoogleLoginView(APIView):
                     user.save()
                     PatientProfile.objects.create(user=user, phone=None, full_name=d.get("full_name") or ident.name,
                                                   gender=d.get("gender") or "", birth_year=d.get("birth_year"),
-                                                  consent_at=timezone.now(), consent_version=CONSENT_VERSION)
+                                                  consent_at=timezone.now(), consent_version=CONSENT_VERSION,
+                                                  language=d.get("language") or request_language(request))
                     SocialAccount.objects.create(user=user, provider="google", uid=ident.sub, email=ident.email,
                                                  email_verified=True, name=ident.name, last_login_at=timezone.now())
                 created = True

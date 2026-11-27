@@ -69,6 +69,14 @@ give hazardous recipes; no diagnosis; no emergency/hospital advice of your own; 
 hakeem (the citations are removed before the patient sees the text); speak as the practitioner, never echo the
 patient in the first person; Urdu script only, no English, Hindi or Chinese words or characters.
 """.strip()
+# The patient's language (API ?lang=en|ar). Rule 6 asks for Urdu; these replace it. Citations stay in the Urdu form
+# because they are how the answer is checked against the passages; they are removed before the patient sees it.
+LANGUAGE_RULES = {
+    "en": "11. IMPORTANT, this replaces rule 6: write the whole answer in simple, polite English (at most 8 "
+          "sentences). Keep every citation exactly in the form (جلد دوم، صفحہ 127). Do not write any other Urdu.",
+    "ar": "11. مهم، وهذا يحل محل القاعدة 6: اكتب الجواب كله بالعربية الفصحى المبسطة المهذبة (8 جمل على الأكثر). "
+          "اكتب كل إحالة بالصيغة نفسها تمامًا: (جلد دوم، صفحہ 127). لا تكتب أي كلام آخر بالأردية.",
+}
 VULNERABLE_RULE = "10. یہ مریض بچہ، حاملہ/دودھ پلانے والی خاتون یا بزرگ ہے: کوئی نسخہ، دوا یا مقدار خوراک ہرگز نہ لکھیں۔"
 
 _VOL = {"اول": 1, "1": 1, "دوم": 2, "2": 2}
@@ -192,8 +200,9 @@ class RagResponder:
         return "کتاب کے اقتباسات:\n\n" + "\n\n".join(parts)
 
     def build_messages(self, s: Session, question: str, ps: list[Passage], vulnerable: bool,
-                       context_note: str = "") -> list[dict]:
-        rules = RAG_RULES + ("\n" + VULNERABLE_RULE if vulnerable else "")
+                       context_note: str = "", language: str = "ur") -> list[dict]:
+        rules = RAG_RULES + ("\n" + VULNERABLE_RULE if vulnerable else "") + \
+            ("\n" + LANGUAGE_RULES[language] if language in LANGUAGE_RULES else "")
         system = SYSTEM_PROMPT + "\n\n" + rules + (f"\n\n{context_note}" if context_note else "") + \
             "\n\n" + self._passage_block(ps)
         history = s.meta.get("chat", [])[-self.history_messages:]
@@ -226,7 +235,7 @@ class RagResponder:
 
     # ---- main entry
     def answer(self, s: Session, question: str, *, vulnerable: bool, context_note: str = "",
-               query: str | None = None) -> Answer:
+               query: str | None = None, language: str = "ur") -> Answer:
         """Raises ProviderError on provider failure (the engine decides the fallback).
         ``query`` is the retrieval query (default: the question itself)."""
         ps = self.retriever.passages((query or question).strip(), limit=self.top_k)
@@ -234,7 +243,7 @@ class RagResponder:
             return Answer(NOT_COVERED_MESSAGE, "not_covered", {"retrieved": 0, "source_chunk_ids": []})
         if self.provider.external and context_note:
             context_note, _ = redact_pii(context_note, s.meta.get("pii_names"))
-        msgs = self.build_messages(s, question, ps, vulnerable, context_note)
+        msgs = self.build_messages(s, question, ps, vulnerable, context_note, language)
         c = self.provider.complete(msgs, max_tokens=self.max_tokens, temperature=self.temperature)
         meta = {"provider": c.provider or self.provider.name, "model": c.model, "prompt_tokens": c.prompt_tokens,
                 "completion_tokens": c.completion_tokens, "latency_ms": c.latency_ms, "retrieved": len(ps),
@@ -251,10 +260,10 @@ class RagResponder:
             return fb
         # citation accuracy is measured on what the model wrote, before any paragraph is removed
         _, _, meta["invalid_citations"], meta["valid_citations"] = check_citations(raw, ps)
-        guarded, ginfo = guard_answer(raw, vulnerable)
+        guarded, ginfo = guard_answer(raw, vulnerable, language)
         meta.update(ginfo)
         text, cited, _, _ = check_citations(guarded, ps)
-        text = tidy_urdu(text)
+        text = tidy_urdu(text) if language == "ur" else text
         log.debug("citations: %s valid, %s invalid; hazards: %s; kept for the patient: %s", meta["valid_citations"],
                   meta["invalid_citations"], meta.get("hazards") or "none", "yes" if cited else
                   "no (no valid citation -> book excerpts)")

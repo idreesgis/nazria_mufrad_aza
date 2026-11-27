@@ -151,23 +151,38 @@ def diet_plans(tehreek: str | None, primary: str | None, conditions: list[str] |
     return []
 
 
-def render_plans(plans: list[dict]) -> str:
-    """Urdu text of the plans (appended to the result text)."""
+def localize_plan(p: dict, lang: str) -> dict:
+    """A plan (built in Urdu) in ur | en | ar, with language-neutral codes added."""
+    from .i18n import tehreek_code, tehreek_name, tr, tr_list
+    q = p["qehwa"]
+    return {"tehreek": tehreek_name(p["tehreek"], lang), "tehreek_code": tehreek_code(p["tehreek"]),
+            "mizaj": tr(p["mizaj"], lang), "choose_if": tr(p["choose_if"], lang) if p["choose_if"] else None,
+            **{k: tr_list(p[k], lang) for k in ("breakfast", "lunch", "dinner", "fruits", "dry_fruits", "rules",
+                                                 "notes")},
+            "qehwa": {"name": tr(q["name"], lang), "ingredients": tr_list(q["ingredients"], lang),
+                      "how": tr(q["how"], lang)}}
+
+
+def render_plans(plans: list[dict], lang: str = "ur") -> str:
+    """Text of the plans (appended to the result text)."""
+    from .i18n import msg, sep, tr
     if not plans:
         return ""
-    lines = ["غذائی پلان:"]
-    for p in plans:
+    lines = [msg("diet_title", lang)]
+    j = sep(lang)
+    for p in (localize_plan(x, lang) for x in plans):
         lines.append("")
-        head = f"تحریک «{p['tehreek']}» (مزاج: {p['mizaj']})"
-        lines.append(f"{p['choose_if']}، {head}:" if p["choose_if"] else f"{head}:")
-        lines.append("• ناشتہ: " + "، ".join(p["breakfast"]))
-        lines.append("• دوپہر کا کھانا: " + "، ".join(p["lunch"]))
-        lines.append("• رات کا کھانا: " + "، ".join(p["dinner"]))
-        lines.append("• پھل: " + ("، ".join(p["fruits"]) if p["fruits"] else NO_FRUITS))
-        lines.append("• میوہ جات: " + ("، ".join(p["dry_fruits"]) if p["dry_fruits"] else NO_DRY_FRUITS))
+        head = msg("diet_head", lang, tehreek=p["tehreek"], mizaj=p["mizaj"])
+        lines.append(msg("diet_choose", lang, choose_if=p["choose_if"], head=head) if p["choose_if"]
+                     else head + ":")
+        lines.append(msg("breakfast", lang) + j.join(p["breakfast"]))
+        lines.append(msg("lunch", lang) + j.join(p["lunch"]))
+        lines.append(msg("dinner", lang) + j.join(p["dinner"]))
+        lines.append(msg("fruits", lang) + (j.join(p["fruits"]) if p["fruits"] else tr(NO_FRUITS, lang)))
+        lines.append(msg("dry_fruits", lang) + (j.join(p["dry_fruits"]) if p["dry_fruits"] else tr(NO_DRY_FRUITS, lang)))
         q = p["qehwa"]
-        lines.append(f"• قہوہ: {q['name']} ({'، '.join(q['ingredients'])})۔ {q['how']}")
+        lines.append(msg("qehwa", lang, name=q["name"], ingredients=j.join(q["ingredients"]), how=q["how"]))
         for n in p["notes"]:
             lines.append("• " + n)
-    lines += ["", "غذا کے اصول:"] + ["• " + r for r in GENERAL_RULES]
+    lines += ["", msg("diet_rules", lang)] + ["• " + tr(r, lang) for r in GENERAL_RULES]
     return "\n".join(lines)
