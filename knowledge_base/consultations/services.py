@@ -182,9 +182,10 @@ def build_payload(s: Session, a: Assessment | None) -> dict:
                 "assessment": None, "book": None, "advice": [], "disclaimer": DISCLAIMER,
                 "text": s.transcript[-1]["content"]}
     sc = a.score
+    vols = sc.evidence_volumes or [2] * len(sc.evidence)
     evidence = [{"question_id": qid, "option_key": key, "question": qtext, "answer": label, "system": system,
-                 "citation": _citation(2, pages)}
-                for (qtext, label, system, pages), (qid, key) in zip(sc.evidence, sc.evidence_keys)]
+                 "citation": _citation(vol, pages)}
+                for (qtext, label, system, pages), (qid, key), vol in zip(sc.evidence, sc.evidence_keys, vols)]
     assessment = {
         "conclusive": sc.conclusive, "primary_system": sc.primary,
         "primary_organs": SYSTEM_ORGANS.get(sc.primary) if sc.primary else None,

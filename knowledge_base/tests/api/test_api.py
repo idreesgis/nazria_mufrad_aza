@@ -66,7 +66,7 @@ def test_questionnaire_for_the_app(anon):
     api = anon
     r = api.get("/api/v1/questionnaire/")
     qs = r.data["questions"]
-    assert [q["id"] for q in qs][:2] == ["red_flags", "complaint"] and len(qs) == 14
+    assert [q["id"] for q in qs][:2] == ["red_flags", "complaint"] and len(qs) == 22
     assert qs[0]["kind"] == "multi" and qs[0]["emergency_unless"] == ["none"] and len(qs[0]["options"]) == 10
     assert next(q for q in qs if q["id"] == "pregnancy")["skip_if"] == {"question_id": "age_group", "equals": "child"}
     assert "weights" not in json.dumps(r.data) and "pages" not in json.dumps(r.data)
@@ -112,7 +112,7 @@ def test_reference_consultation_matches_the_cli(api, kb):
     eng = QuestionnaireEngine(kb.retriever())
     s = Session()
     eng.start(s)
-    for m in "10|مجھے پرانی قبض کی شکایت ہے|3|2|3|1|1|1|1|1|1|2|2|4".split("|"):
+    for m in "10|مجھے پرانی قبض کی شکایت ہے|3|2|3|1|1|1|1|1|1|2|2|4|3|2|3|4|7|3|3|9".split("|"):
         reply = eng.reply(s, m)
     assert d["text"] == reply.text
 
@@ -121,7 +121,7 @@ def test_consultation_is_stored_in_the_patients_history(api, kb, app_key):
     r = create(api)
     uid = r.data["id"]
     s = kb.sessions[uid]
-    assert s.status == "completed" and s.answers["urine_color"] == "red" and len(s.transcript) == 29
+    assert s.status == "completed" and s.answers["urine_color"] == "red" and len(s.transcript) == 45
     c = Consultation.objects.get(pk=uid)
     assert c.primary_system == "عضلاتی" and c.account == api.user and c.patient == api.patient and c.client.name == "android-test"
     got = api.get(f"/api/v1/consultations/{uid}/")
@@ -273,3 +273,23 @@ def test_explanations_are_rate_limited_per_client(api, monkeypatch):
     r = create(api)
     codes = [token_get(api, r, "explanation/", "post").status_code for _ in range(3)]
     assert codes == [200, 200, 429]
+
+
+def test_vol1_signs_are_scored_and_cited_with_their_volume(api):
+    answers = {**REFERENCE, "joints": "sharp_pain", "skin": ["cracks", "white_patches"], "other_signs": ["tremor"]}
+    r = create(api, answers)
+    assert r.status_code == 201, r.data
+    a = r.data["assessment"]
+    assert a["totals"] == {"اعصابی": 1, "عضلاتی": 11, "غدی": 0}
+    ev = {(e["question_id"], e["option_key"]): e for e in a["evidence"]}
+    assert ev[("joints", "sharp_pain")]["citation"] == {"volume": 1, "volume_name": "جلد اول", "pages": [559],
+                                                       "text": "جلد اول، صفحہ 559"}
+    assert ev[("urine_color", "red")]["citation"]["volume"] == 2
+    assert "(نقرس)" in ev[("joints", "sharp_pain")]["answer"] and "جلد اول، صفحہ 559" in r.data["text"]
+
+
+def test_multi_select_signs_need_a_list_and_none_is_an_answer(api):
+    r = create(api, {**REFERENCE, "skin": "cracks"})
+    assert r.status_code == 400 and "list" in r.data["fields"]["skin"]
+    r = create(api, {k: v for k, v in REFERENCE.items() if k != "other_signs"})
+    assert r.status_code == 400 and r.data["fields"] == {"other_signs": "required"}

@@ -261,7 +261,7 @@ def seed_questionnaire(cur, questions: list[Question] = DEFAULT_QUESTIONS) -> No
         for oi, o in enumerate(q.options):
             cur.execute("INSERT INTO nazria.questionnaire_options (question_id, option_key, ordinal, label_ur, weights, "
                         "source_book_id, source_pages) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                        (q.id, o.key, oi, o.label, Jsonb(o.weights), SOURCE_BOOK if o.pages else None, o.pages))
+                        (q.id, o.key, oi, o.label, Jsonb(o.weights), o.volume if o.pages else None, o.pages))
 
 
 def _json(value):
@@ -281,10 +281,11 @@ def load_questions(conn: psycopg.Connection) -> list[Question]:
     if not qrows:
         return DEFAULT_QUESTIONS
     opts: dict[str, list[Option]] = {}
-    for qid, key, label, weights, pages in conn.execute(
-            "SELECT question_id, option_key, label_ur, weights, source_pages FROM nazria.questionnaire_options "
-            "ORDER BY question_id, ordinal"):
-        opts.setdefault(qid, []).append(Option(key, label, dict(_json(weights) or {}), list(pages or [])))
+    for qid, key, label, weights, pages, book in conn.execute(
+            "SELECT question_id, option_key, label_ur, weights, source_pages, source_book_id "
+            "FROM nazria.questionnaire_options ORDER BY question_id, ordinal"):
+        opts.setdefault(qid, []).append(Option(key, label, dict(_json(weights) or {}), list(pages or []),
+                                               int(book or SOURCE_BOOK)))
     return [Question(qid, kind, text, stage, opts.get(qid, [])) for qid, kind, stage, text in qrows]
 
 

@@ -84,8 +84,17 @@ Alternative without Python on the target: restore the dump
 
 1. **Red-flag triage.** Emergency symptoms stop the consultation and refer the patient to a hospital.
 2. **Complaint and profile.** Duration, age group, pregnancy.
-3. **Nine sign questions.** Urine colour, bowel habit, body state, gas, taste, heart, burning urine, catarrh, phlegm.
-   Each option is weighted toward اعصابی / عضلاتی / غدی and **cites the book page** (vol. 2 pp. 125–134).
+3. **Seventeen sign questions.** Each option is weighted toward اعصابی / عضلاتی / غدی and **cites the book volume and
+   page**:
+   - urine colour, bowel habit, body state, gas, taste, heart, burning urine, catarrh, phlegm (vol. 2 pp. 125–134);
+   - appetite, thirst, when pain gets worse, joints, skin, hair, the prevailing feeling, and other signs such as
+     dizziness, tremor, sneezing, hoarseness, hiccups, nausea, night blindness and bedwetting (vol. 1
+     «تحقیقات امراض و علامات» pp. 549–583, one point each). Their labels name the book's term in brackets, for
+     example «(نقرس)», so the patient learns what the book calls the sign.
+   - Every question has a "normal / none" answer that adds nothing.
+   - After an update that adds questions, run `python manage.py seed_questionnaire`; `deploy/update.sh` does this.
+     It only inserts what is missing, never overwrites a Hakeem's edit, and never re-activates a question a Hakeem
+     switched off.
 4. **Result.** The dominant system or tehreek with its evidence, then the matching book section (e.g. «عضلاتی قبض», p. 127),
    its recipe and dose **only if safe**, diet advice, and a referral to a Hakeem.
 

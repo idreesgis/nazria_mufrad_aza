@@ -9,6 +9,8 @@ run() { sudo -u nazria env NAZRIA_ENV_FILE=/etc/nazria/nazria.env bash -c "cd $A
 sudo -u nazria git -C "$APP" pull --ff-only
 sudo -u nazria "$VENV/bin/pip" install --quiet -r "$APP/knowledge_base/requirements.txt"
 run "$VENV/bin/python manage.py migrate --noinput"
+# new questionnaire questions/options (insert-only: a Hakeem's edits are never overwritten)
+run "$VENV/bin/python manage.py seed_questionnaire"
 run "$VENV/bin/python manage.py collectstatic --noinput --verbosity 0"
 run "$VENV/bin/python manage.py check --deploy --fail-level ERROR"
 systemctl restart nazria-api

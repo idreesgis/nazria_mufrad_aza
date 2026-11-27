@@ -12,7 +12,8 @@ from nazria_kb.safety import (PRACTITIONER_ONLY, RED_FLAGS, VULNERABLE_NO_RECIPE
                               guard_answer, hazard_flags, looks_like_recipe)
 
 NONE_FLAG = str(len(RED_FLAGS) + 1)
-ADULT_SIGNS = ["3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4"]
+ADULT_SIGNS = ["3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4",
+               "3", "2", "3", "4", "7", "3", "3", "9"]   # appetite .. other_signs: normal / none
 
 
 @pytest.mark.parametrize("text,code", [
