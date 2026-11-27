@@ -8,3 +8,4 @@ nazria_kb_dump.sql
 .env
 .env.*
 !.env.example
+staticfiles/
