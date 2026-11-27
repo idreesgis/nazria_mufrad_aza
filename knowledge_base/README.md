@@ -95,8 +95,15 @@ Alternative without Python on the target: restore the dump
    - After an update that adds questions, run `python manage.py seed_questionnaire`; `deploy/update.sh` does this.
      It only inserts what is missing, never overwrites a Hakeem's edit, and never re-activates a question a Hakeem
      switched off.
-4. **Result.** The dominant system or tehreek with its evidence, then the matching book section (e.g. «عضلاتی قبض», p. 127),
-   its recipe and dose **only if safe**, diet advice, and a referral to a Hakeem.
+4. **Result.** The dominant system or tehreek with its mizaj and the symptoms that point to it, then the matching
+   topic (e.g. «عضلاتی قبض»), its recipe and dose **only if safe**, and a referral to a qualified practitioner
+   (مستند معالج). The patient sees no book name, author, page reference or "حکیم"; the references stay in the
+   question bank for the review tools (`strip_references` also cleans book excerpts and AI explanations).
+5. **Diet plan** (`nazria_kb/diet.py`) for the diagnosed tehreek: breakfast, lunch, dinner, fruits, dry fruits and a
+   qehwa from the corrective food group of vol. 1 «ترتیب غذا بالنظریہ مفرد اعضاء» pp. 685–687 (patient's tehreek →
+   foods of the next tehreek in the cycle), with the book's eating rules (pp. 683–688). If only the dominant system is
+   known, the plans of its two tehreeks, each with the feeling that tells which one applies. Notes for diabetes, high
+   blood pressure, kidney/liver/heart disease, allergies and medicines come from the patient's info.
 
 Safety (`nazria_kb/safety.py`):
 - Recipes containing arsenic, mercury, copper sulphate, kushta, aconite, nux vomica, opium, lead and similar are never shown.

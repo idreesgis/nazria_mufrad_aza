@@ -63,13 +63,15 @@ def test_scoring_muscular_and_inconclusive():
     assert not score(DEFAULT_QUESTIONS, {"heart": "yes"}).conclusive   # below minimum evidence
 
 
-def test_full_consultation_shows_safe_recipe_with_citations():
+def test_full_consultation_shows_safe_recipe_without_references():
     ret = FakeRetriever("سناکی، تیز پات۔ دونوں ہم وزن سفوف کر لیں۔")
     s, r = run(QuestionnaireEngine(ret), MUSCULAR)
     assert r.done and s.status == "completed"
     assert s.result["primary_system"] == "عضلاتی" and s.result["conclusive"]
     assert ret.calls[0] == ("قبض", "عضلاتی")
-    assert "سناکی" in r.text and "صفحہ 127" in r.text and "مستند حکیم" in r.text
+    assert "سناکی" in r.text and "مستند معالج" in r.text
+    for ref in ("صفحہ", "صفحات", "جلد اول", "جلد دوم", "کتاب", "حکیم", "صابر ملتانی"):          # findings only, no references
+        assert ref not in r.text, ref
     roles = [m["role"] for m in s.transcript]
     assert roles[0] == "hakeem" and all(a != b for a, b in zip(roles, roles[1:]))
 
@@ -173,14 +175,14 @@ def test_vol1_signs_cite_volume_1_pages_of_the_signs_treatise():
     assert all(o.volume == 2 for q in DEFAULT_QUESTIONS if q.id not in VOL1 for o in q.options if o.weights)
 
 
-def test_vol1_signs_score_and_cite_their_volume():
+def test_vol1_signs_score_and_keep_their_volume_internally():
     sc = score(DEFAULT_QUESTIONS, {"joints": "sharp_pain", "skin": ["cracks", "scaly_patches"], "pain_timing": "movement",
                                    "other_signs": ["sneezing"]})
     assert sc.totals == {"اعصابی": 1, "عضلاتی": 4, "غدی": 0} and sc.primary == "عضلاتی"
-    assert sc.evidence_volumes == [1] * 5 and len(sc.evidence_keys) == 5
+    assert sc.evidence_volumes == [1] * 5 and len(sc.evidence_keys) == 5     # kept for review tools
     from nazria_kb.engine import Assessment, render_assessment
     text = render_assessment(Assessment(sc, False, False))
-    assert "جلد اول، صفحہ 559" in text and "(نقرس)" in text
+    assert "(نقرس)" in text and "→ عضلاتی" in text and "جلد اول" not in text and "صفحہ" not in text
 
 
 def test_neutral_answers_add_nothing():

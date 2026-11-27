@@ -101,11 +101,9 @@ def test_reference_consultation_matches_the_cli(api, kb):
     assert d["status"] == "completed" and d["emergency"] is None
     assert a["primary_system"] == "عضلاتی" and a["totals"] == {"اعصابی": 0, "عضلاتی": 8, "غدی": 0} and a["conclusive"]
     assert a["evidence"][0] == {"question_id": "urine_color", "option_key": "red", "question": a["evidence"][0]["question"],
-                                "answer": "سرخ یا سرخی مائل", "system": "عضلاتی",
-                                "citation": {"volume": 2, "volume_name": "جلد دوم", "pages": [125, 127, 133],
-                                             "text": "جلد دوم، صفحات 125، 127، 133"}}
+                                "answer": "سرخ یا سرخی مائل", "system": "عضلاتی"}
     book = d["book"]
-    assert book["topic"]["id"] == 1603 and book["topic"]["citation"]["text"] == "جلد دوم، صفحہ 127"
+    assert book["topic"] == {"id": 1603, "title": "عضلاتی قبض"}
     assert book["recipe"]["status"] == "shown" and "سناکی" in book["recipe"]["text"]
     assert d["advice"] and d["explanation"] is None and d["explanation_available"] is False
     # the same answers typed into the CLI engine give exactly the same Urdu text
@@ -115,6 +113,9 @@ def test_reference_consultation_matches_the_cli(api, kb):
     for m in "10|مجھے پرانی قبض کی شکایت ہے|3|2|3|1|1|1|1|1|1|2|2|4|3|2|3|4|7|3|3|9".split("|"):
         reply = eng.reply(s, m)
     assert d["text"] == reply.text
+    body = json.dumps(d, ensure_ascii=False)
+    for ref in ("صفحہ", "صفحات", "جلد اول", "جلد دوم", "citation", "کتاب", "حکیم", "صابر ملتانی"):   # no references anywhere
+        assert ref not in body, ref
 
 
 def test_consultation_is_stored_in_the_patients_history(api, kb, app_key):
@@ -201,7 +202,8 @@ def test_hazardous_recipes_are_never_returned(api):
 
 def test_unknown_complaint_falls_back_to_safe_passages(api):
     r = create(api, {**REFERENCE, "complaint": "نزلہ رہتا ہے"})
-    assert r.data["book"]["topic"] is None and r.data["book"]["passages"][0]["citation"]["text"] == "جلد دوم، صفحہ 128"
+    p = r.data["book"]["passages"][0]
+    assert r.data["book"]["topic"] is None and p["title"] == "نزلہ" and "صفحہ" not in json.dumps(p, ensure_ascii=False)
 
 
 def test_database_errors_do_not_leak_connection_details(api, kb, monkeypatch):
@@ -232,8 +234,10 @@ def test_explanation_shown_stored_and_not_requested_twice(api, kb, monkeypatch):
     assert r.data["explanation_available"] is True
     e = token_get(api, r, "explanation/", "post")
     assert e.status_code == 200 and e.data["status"] == "shown", e.data
-    assert e.data["text"].startswith("کتاب کے مطابق") and "ماخذ" not in e.data["text"]
-    assert e.data["sources"][0]["citation"]["text"] == "جلد دوم، صفحہ 127"
+    # grounded (it cited a retrieved page) but shown without book, page or "حکیم"
+    assert e.data["text"].startswith("عضلاتی قبض") and "ماخذ" not in e.data["text"] and "sources" not in e.data
+    assert "صفحہ" not in e.data["text"] and "کتاب" not in e.data["text"] and "مستند معالج" in e.data["text"]
+    assert kb.sessions[r.data["id"]].result["explanation_sources"][0]["pages"] == [127]     # kept for review
     assert e.data["external_provider"] is True and "بیرونی AI" in e.data["notice"]
     sent = json.dumps(fp.calls[0]["messages"], ensure_ascii=False)
     assert "احمد علی" not in sent and "03001234567" not in sent        # identifying details never leave the server
@@ -275,17 +279,15 @@ def test_explanations_are_rate_limited_per_client(api, monkeypatch):
     assert codes == [200, 200, 429]
 
 
-def test_vol1_signs_are_scored_and_cited_with_their_volume(api):
+def test_vol1_signs_are_scored(api):
     answers = {**REFERENCE, "joints": "sharp_pain", "skin": ["cracks", "white_patches"], "other_signs": ["tremor"]}
     r = create(api, answers)
     assert r.status_code == 201, r.data
     a = r.data["assessment"]
     assert a["totals"] == {"اعصابی": 1, "عضلاتی": 11, "غدی": 0}
     ev = {(e["question_id"], e["option_key"]): e for e in a["evidence"]}
-    assert ev[("joints", "sharp_pain")]["citation"] == {"volume": 1, "volume_name": "جلد اول", "pages": [559],
-                                                       "text": "جلد اول، صفحہ 559"}
-    assert ev[("urine_color", "red")]["citation"]["volume"] == 2
-    assert "(نقرس)" in ev[("joints", "sharp_pain")]["answer"] and "جلد اول، صفحہ 559" in r.data["text"]
+    assert ev[("joints", "sharp_pain")]["system"] == "عضلاتی" and "citation" not in ev[("joints", "sharp_pain")]
+    assert "(نقرس)" in ev[("joints", "sharp_pain")]["answer"] and "صفحہ" not in r.data["text"]
 
 
 def test_multi_select_signs_need_a_list_and_none_is_an_answer(api):
@@ -293,3 +295,23 @@ def test_multi_select_signs_need_a_list_and_none_is_an_answer(api):
     assert r.status_code == 400 and "list" in r.data["fields"]["skin"]
     r = create(api, {k: v for k, v in REFERENCE.items() if k != "other_signs"})
     assert r.status_code == 400 and r.data["fields"] == {"other_signs": "required"}
+
+
+def test_result_has_diet_plans_for_the_system_found(api):
+    r = create(api)                                     # only عضلاتی signs: both of its tehreeks, to choose from
+    plans = r.data["diet_plans"]
+    assert [p["tehreek"] for p in plans] == ["عضلاتی اعصابی", "عضلاتی غدی"] and all(p["choose_if"] for p in plans)
+    assert plans[1]["qehwa"]["name"] == "اجوائن کا قہوہ" and "غذائی پلان" in r.data["text"]
+    # one glandular sign more: tehreek عضلاتی غدی → one plan, foods of غدی عضلاتی
+    r = create(api, {**REFERENCE, "thirst": "unquenched"})
+    a = r.data["assessment"]
+    assert a["tehreek"] == "عضلاتی غدی" and [p["tehreek"] for p in r.data["diet_plans"]] == ["عضلاتی غدی"]
+    assert "چلغوزہ" in r.data["diet_plans"][0]["dry_fruits"]
+
+
+def test_emergency_has_no_diet_plan_and_diabetes_adds_a_note(api):
+    assert create(api, {"red_flags": ["breathing"]}).data["diet_plans"] == []
+    from .conftest import make_patient
+    p = make_patient(api.user, "Abba", relation="parent", birth_year=1970, chronic_conditions=["diabetes"])
+    r = create(api, {**REFERENCE, "thirst": "unquenched"}, patient=p)
+    assert any("شوگر" in n for n in r.data["diet_plans"][0]["notes"])

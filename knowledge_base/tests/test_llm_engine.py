@@ -99,7 +99,7 @@ def test_hazardous_model_answer_is_replaced():
     bad = GOOD + "\nنسخہ: کشتہ سنکھیا 1 رتی، شنگرف 1 ماشہ (جلد دوم، صفحہ 127)"
     e, s, r = llm_session(FakeProvider([bad]))
     r = e.reply(s, "قبض کا نسخہ بتائیں")
-    assert "1 رتی" not in r.text and "مستند حکیم کی نگرانی" in r.text and "صفحہ 127" in r.text
+    assert "1 رتی" not in r.text and "مستند معالج کی نگرانی" in r.text and "صفحہ 127" in r.text
     assert s.result["answers"][-1]["hazards"] == ["arsenic", "kushta", "mercury"]
 
 
