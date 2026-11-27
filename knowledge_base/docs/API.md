@@ -189,6 +189,12 @@ GET  /patients/{id}/history/             every change to the general info: who, 
 ```
 
 - **How to answer each kind:** `single` takes one option key, `multi` a list of keys, `text` a string.
+- **Sign questions:** there are 17 of them, from both volumes of the book. Every one has a neutral last option
+  ("معمول کے مطابق" / "ان میں سے کوئی نہیں"); for a `multi` question send `["none"]`.
+  - Each label already names the book's term, e.g. «(نقرس)».
+  - In the result, every `evidence` row cites its own `volume` and `pages`, so show `citation.text`.
+  - Render the questions from `GET /questionnaire/`; don't hard-code them. A Hakeem can add, edit or switch off
+    questions in the database, and `version` changes when they do.
 - **Required answers:** every question is required except one removed by `skip_if`. After an emergency answer,
   nothing else is needed.
 

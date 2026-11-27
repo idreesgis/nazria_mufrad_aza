@@ -16,7 +16,8 @@ from nazria_kb.safety import BOOK_DISCLAIMER_LLM, DISCLAIMER, RED_FLAGS, VULNERA
 
 NONE_FLAG = str(len(RED_FLAGS) + 1)
 GOOD = "عضلاتی قبض میں قارورہ سرخ ہوتا ہے اور قبض شدید ہوتی ہے (جلد دوم، صفحہ 127)۔"
-SIGNS = ["3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4"]   # duration .. phlegm (adult)
+SIGNS = ["3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4",   # duration .. phlegm (adult)
+         "3", "2", "3", "4", "7", "3", "3", "9"]   # appetite .. other_signs: normal / none
 
 
 class R:

@@ -42,7 +42,9 @@ def run(engine, answers):
 
 
 # urine red, constipation, dry, gas, sour, heart yes, burning no, catarrh no, phlegm none
-MUSCULAR = [NONE_FLAG, "قبض", "3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4"]
+# appetite .. other_signs: normal / none
+MUSCULAR = [NONE_FLAG, "قبض", "3", "2", "3", "1", "1", "1", "1", "1", "1", "2", "2", "4",
+            "3", "2", "3", "4", "7", "3", "3", "9"]
 
 
 def test_every_scored_option_cites_pages_and_valid_system():
@@ -151,3 +153,37 @@ def test_citation_corrections_match_defaults():
     by = {(q.id, o.key): o.pages for q in DEFAULT_QUESTIONS for o in q.options}
     for qid, key, old, new in CITATION_CORRECTIONS:
         assert by[(qid, key)] == new and old != new
+
+
+# --------------------------------------------------------------------------- the vol 1 signs
+VOL1 = {"appetite", "thirst", "pain_timing", "joints", "skin", "hair", "feeling", "other_signs"}
+
+
+def test_vol1_signs_cite_volume_1_pages_of_the_signs_treatise():
+    qs = {q.id: q for q in DEFAULT_QUESTIONS}
+    assert VOL1 <= set(qs)
+    for qid in VOL1:
+        q = qs[qid]
+        assert q.stage == "signs" and q.options[-1].weights == {}          # last option: normal / none
+        for o in q.options:
+            if o.weights:
+                assert o.volume == 1 and all(549 <= p <= 583 for p in o.pages), (qid, o.key)
+                assert list(o.weights.values()) == [1]                     # one point: a supporting sign
+    # the original nine sign questions keep citing vol 2
+    assert all(o.volume == 2 for q in DEFAULT_QUESTIONS if q.id not in VOL1 for o in q.options if o.weights)
+
+
+def test_vol1_signs_score_and_cite_their_volume():
+    sc = score(DEFAULT_QUESTIONS, {"joints": "sharp_pain", "skin": ["cracks", "scaly_patches"], "pain_timing": "movement",
+                                   "other_signs": ["sneezing"]})
+    assert sc.totals == {"اعصابی": 1, "عضلاتی": 4, "غدی": 0} and sc.primary == "عضلاتی"
+    assert sc.evidence_volumes == [1] * 5 and len(sc.evidence_keys) == 5
+    from nazria_kb.engine import Assessment, render_assessment
+    text = render_assessment(Assessment(sc, False, False))
+    assert "جلد اول، صفحہ 559" in text and "(نقرس)" in text
+
+
+def test_neutral_answers_add_nothing():
+    neutral = {"appetite": "normal", "thirst": "normal", "pain_timing": "none", "joints": "none", "skin": ["none"],
+               "hair": "normal", "feeling": "none", "other_signs": ["none"]}
+    assert score(DEFAULT_QUESTIONS, neutral).totals == {s: 0 for s in SYSTEMS}

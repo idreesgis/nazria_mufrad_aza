@@ -89,4 +89,7 @@ def hakeem(app_key, db):
 # the reference consultation of the CLI: chronic constipation, adult, muscular signs
 REFERENCE = {"red_flags": ["none"], "complaint": "مجھے پرانی قبض کی شکایت ہے", "duration": "chronic",
              "age_group": "adult", "pregnancy": "na", "urine_color": "red", "bowel": "constipation", "body": "dry",
-             "abdomen": "gas", "taste": "sour", "heart": "yes", "burning_urine": "no", "catarrh": "no", "phlegm": "none"}
+             "abdomen": "gas", "taste": "sour", "heart": "yes", "burning_urine": "no", "catarrh": "no", "phlegm": "none",
+             # the vol 1 signs: all normal / none, so the reference result stays the vol 2 one
+             "appetite": "normal", "thirst": "normal", "pain_timing": "none", "joints": "none", "skin": ["none"],
+             "hair": "normal", "feeling": "none", "other_signs": ["none"]}
