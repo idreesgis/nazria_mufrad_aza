@@ -8,5 +8,10 @@ google-genai>=3.3
 Django>=5.2,<5.3
 djangorestframework>=3.16,<3.17
 drf-spectacular>=0.28,<0.29
+djangorestframework-simplejwt>=5.5,<5.6
 pytest-django>=4.9
+# pulse-video analysis (PPG); the headless build needs no GUI libraries on the server
+opencv-python-headless>=4.10
+numpy>=1.26
+scipy>=1.11
 gunicorn>=23; sys_platform != "win32"

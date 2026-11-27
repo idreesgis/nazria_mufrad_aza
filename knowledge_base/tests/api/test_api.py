@@ -18,8 +18,7 @@ def create(api, answers=REFERENCE):
 
 
 def token_get(api, r, suffix="", method="get"):
-    return getattr(api, method)(f"/api/v1/consultations/{r.data['id']}/{suffix}",
-                                HTTP_X_CONSULTATION_TOKEN=r.data["access_token"])
+    return getattr(api, method)(f"/api/v1/consultations/{r.data['id']}/{suffix}")
 
 
 # ---------------------------------------------------------------- access
@@ -29,15 +28,20 @@ def test_health_needs_no_key(client):
                                                  "api_version": 1}
 
 
-def test_api_key_is_required_and_checked(client):
-    assert client.get("/api/v1/questionnaire/").status_code == 401
-    assert client.get("/api/v1/questionnaire/", HTTP_AUTHORIZATION="Api-Key nzr_bad_key").status_code == 401
+def test_app_key_is_required_and_checked(client, app_key):
+    r = client.get("/api/v1/questionnaire/")
+    assert r.status_code == 403 and r.json()["error"] == "app_key_invalid"
+    assert client.get("/api/v1/questionnaire/", HTTP_X_API_KEY="nzr_bad_key").status_code == 403
     c, key = ApiClient.create("revoked")
     ApiClient.objects.filter(pk=c.pk).update(is_active=False)
-    assert client.get("/api/v1/questionnaire/", HTTP_AUTHORIZATION=f"Api-Key {key}").status_code == 401
-    _, good = ApiClient.create("ok")
-    assert client.get("/api/v1/questionnaire/", HTTP_X_API_KEY=good).status_code == 200
-    assert ApiClient.objects.get(name="ok").key_hash != good and good not in str(ApiClient.objects.values())
+    assert client.get("/api/v1/questionnaire/", HTTP_X_API_KEY=key).status_code == 403
+    assert client.get("/api/v1/questionnaire/", HTTP_X_API_KEY=app_key).status_code == 200
+    assert ApiClient.objects.get(name="android-test").key_hash != app_key
+
+
+def test_consultations_need_a_login(anon):
+    assert anon.post("/api/v1/consultations/", {"answers": REFERENCE}, format="json").status_code == 401
+    assert anon.get("/api/v1/consultations/").status_code == 401
 
 
 def test_create_api_client_command_prints_a_working_key(client, capsys):
@@ -45,7 +49,7 @@ def test_create_api_client_command_prints_a_working_key(client, capsys):
     call_command("create_api_client", "android-v1")
     key = capsys.readouterr().out.strip().splitlines()[-1]
     assert key.startswith("nzr_")
-    assert client.get("/api/v1/questionnaire/", HTTP_AUTHORIZATION=f"Api-Key {key}").status_code == 200
+    assert client.get("/api/v1/questionnaire/", HTTP_X_API_KEY=key).status_code == 200
     from django.core.management.base import CommandError
     with pytest.raises(CommandError):
         call_command("create_api_client", "android-v1")
@@ -53,11 +57,12 @@ def test_create_api_client_command_prints_a_working_key(client, capsys):
 
 def test_openapi_schema_is_public(client):
     r = client.get("/api/schema/")
-    assert r.status_code == 200 and b"/api/v1/consultations/" in r.content and b"ApiKey" in r.content
+    assert r.status_code == 200 and b"/api/v1/consultations/" in r.content and b"X-Api-Key" in r.content
 
 
 # ---------------------------------------------------------------- questionnaire and triage
-def test_questionnaire_for_the_app(api):
+def test_questionnaire_for_the_app(anon):
+    api = anon
     r = api.get("/api/v1/questionnaire/")
     qs = r.data["questions"]
     assert [q["id"] for q in qs][:2] == ["red_flags", "complaint"] and len(qs) == 14
@@ -73,16 +78,16 @@ def test_questionnaire_for_the_app(api):
     ({"red_flags": ["none"], "complaint": "میرے سینے میں شدید درد ہے"}, True, ["chest_pain"]),
     ({"red_flags": ["none"], "complaint": "خودکشی کے خیالات آتے ہیں"}, True, ["self_harm"]),
 ])
-def test_triage(api, body, emergency, flags):
-    r = api.post("/api/v1/triage/", body, format="json")
+def test_triage(anon, body, emergency, flags):
+    r = anon.post("/api/v1/triage/", body, format="json")
     assert r.status_code == 200 and r.data["emergency"] is emergency and r.data["flags"] == flags
     assert (r.data["message"] is not None) is emergency
     if "self_harm" in flags:
         assert "اکیلے نہیں" in r.data["message"]
 
 
-def test_triage_rejects_unknown_options(api):
-    r = api.post("/api/v1/triage/", {"red_flags": ["fever"]}, format="json")
+def test_triage_rejects_unknown_options(anon):
+    r = anon.post("/api/v1/triage/", {"red_flags": ["fever"]}, format="json")
     assert r.status_code == 400 and r.data["error"] == "invalid_request"
 
 
@@ -111,24 +116,33 @@ def test_reference_consultation_matches_the_cli(api, kb):
     assert d["text"] == reply.text
 
 
-def test_consultation_is_stored_and_readable_only_with_its_token(api, kb):
+def test_consultation_is_stored_in_the_patients_history(api, kb, app_key):
     r = create(api)
-    uid, token = r.data["id"], r.data["access_token"]
+    uid = r.data["id"]
     s = kb.sessions[uid]
     assert s.status == "completed" and s.answers["urine_color"] == "red" and len(s.transcript) == 29
     c = Consultation.objects.get(pk=uid)
-    assert c.primary_system == "عضلاتی" and c.token_hash != token and c.client.name == "android-test"
-    got = token_get(api, r)
-    assert got.status_code == 200 and got.data["assessment"] == r.data["assessment"] and "access_token" not in got.data
-    assert api.get(f"/api/v1/consultations/{uid}/").status_code == 404
-    assert api.get(f"/api/v1/consultations/{uid}/", HTTP_X_CONSULTATION_TOKEN="wrong").status_code == 404
+    assert c.primary_system == "عضلاتی" and c.patient == api.user and c.client.name == "android-test"
+    got = api.get(f"/api/v1/consultations/{uid}/")
+    assert got.status_code == 200 and got.data["assessment"] == r.data["assessment"] and got.data["patient"] == api.user.pk
+    history = api.get("/api/v1/consultations/").data
+    assert history["count"] == 1 and history["results"][0]["complaint"] == REFERENCE["complaint"]
+    # another patient can neither see nor touch it
+    from .conftest import logged_in, make_user
+    other = logged_in(app_key, make_user("+923009999999"))
+    assert other.get(f"/api/v1/consultations/{uid}/").status_code == 404
+    assert other.delete(f"/api/v1/consultations/{uid}/").status_code == 404
+    assert other.get("/api/v1/consultations/").data["count"] == 0
 
 
-def test_patient_can_delete_their_consultation(api, kb):
+def test_delete_hides_from_the_patient_but_keeps_everything(api, kb, hakeem):
     r = create(api)
     assert token_get(api, r, method="delete").status_code == 204
-    assert r.data["id"] not in kb.sessions and not Consultation.objects.exists()
-    assert token_get(api, r).status_code == 404
+    assert token_get(api, r).status_code == 404 and api.get("/api/v1/consultations/").data["count"] == 0
+    c = Consultation.objects.get(pk=r.data["id"])
+    assert c.deleted_at and c.deleted_by == api.user and r.data["id"] in kb.sessions      # nothing is removed
+    staff_view = hakeem.get(f"/api/v1/consultations/{r.data['id']}/")
+    assert staff_view.status_code == 200 and staff_view.data["deleted"] is True
 
 
 @pytest.mark.parametrize("change,field,message", [
@@ -149,6 +163,7 @@ def test_emergency_needs_only_the_triage_answer_and_cannot_be_explained(api, mon
     r = create(api, {"red_flags": ["breathing"]})
     assert r.status_code == 201 and r.data["status"] == "emergency" and r.data["assessment"] is None
     assert r.data["emergency"]["flags"] == ["breathing"] and "ہسپتال" in r.data["emergency"]["message"]
+    assert api.get("/api/v1/consultations/").data["results"][0]["status"] == "emergency"
     monkeypatch.setenv("NAZRIA_ENGINE", "hybrid")
     assert token_get(api, r, "explanation/", "post").status_code == 409
 
@@ -249,7 +264,7 @@ def test_explanation_without_permission_for_external_providers_is_unavailable(ap
 
 
 def test_explanations_are_rate_limited_per_client(api, monkeypatch):
-    from consultations.authentication import ExplanationRateThrottle
+    from accounts.throttles import ExplanationRateThrottle
     monkeypatch.setattr(ExplanationRateThrottle, "rate", "2/min", raising=False)
     r = create(api)
     codes = [token_get(api, r, "explanation/", "post").status_code for _ in range(3)]

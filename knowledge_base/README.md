@@ -10,8 +10,8 @@ Multani, جلد اول + جلد دوم, 1,879 pages) into:
 and loads it all into **PostgreSQL** (schema `nazria`) for a self-hosted conversational model
 (RAG retrieval + fine-tuning).
 
-The **REST API** (Django) serves the knowledge base to the Android app. The app collects the patient's answers, and
-the server returns the assessment. See the [REST API](#rest-api-for-the-android-app) section below and
+The **REST API** (Django) is the whole backend of the Android app: patient accounts, the questionnaire and
+assessment, pulse-video analysis, and a complete audit log. See the [REST API](#rest-api-for-the-android-app) section below and
 [`docs/API.md`](docs/API.md).
 
 ## Pipeline
@@ -148,53 +148,46 @@ tokens, cost if `NAZRIA_PRICE_*` is set).
 
 Details: **[docs/AI_PROVIDER_ARCHITECTURE.md](docs/AI_PROVIDER_ARCHITECTURE.md)**.
 
-## REST API for the Android app
+## REST API for the Android app (the whole backend)
 
-Django 5.2 LTS, Django REST Framework, and an OpenAPI spec in [`docs/openapi.yaml`](docs/openapi.yaml). The API
-calls the same `nazria_kb` code as the CLI, so the result is identical. The endpoints, the app flow and the error
-codes are described in [`docs/API.md`](docs/API.md).
+This is a single Django project: Django 5.2 LTS, Django REST Framework, JWT login, and an OpenAPI spec in
+[`docs/openapi.yaml`](docs/openapi.yaml). It contains everything the Android app talks to.
 
-| Endpoint | Purpose |
+| App | What it does |
 |---|---|
-| `GET /api/v1/questionnaire/` | The questions to show, as edited by a Hakeem in the database. |
-| `POST /api/v1/triage/` | Emergency check for the red-flag answers and the complaint. |
-| `POST /api/v1/consultations/` | All the answers in; the assessment, book chapter and safe recipe or withheld reason out. |
-| `GET` / `DELETE /api/v1/consultations/{id}/` | Read the stored result again, or delete it. |
-| `POST /api/v1/consultations/{id}/explanation/` | AI explanation from book passages only. Off until `NAZRIA_ENGINE=hybrid`. |
-| `GET /api/v1/health/` | Liveness and database check. |
+| `accounts` | Patients register and log in with phone + password (JWT); Hakeem/admin roles; profile; consent record. |
+| `consultations` | Questionnaire, emergency triage, book-based assessment (the same `nazria_kb` code as the CLI), each patient's history, AI explanation (off until `NAZRIA_ENGINE=hybrid`). |
+| `pulse` | Pulse-video (PPG) upload and analysis. It was the separate `pulse_diagnosis` project and is now part of this API. |
+| `audit` | One append-only log row per API or admin request: who, what, when, IP and result. The database refuses changes to it. |
 
-**Setup**, using the same database and `.env` as the knowledge base:
+Nothing is deleted automatically. A patient's "delete" only hides an item from their own history, and staff see the
+complete history of every patient. [`docs/API.md`](docs/API.md) covers the endpoints, the login and consultation
+flows and the error codes for the Android developer.
+
+**Local setup** (Windows or PyCharm too), using the same `.env` and database as the knowledge base:
 
 ```bash
 pip install -r requirements.txt
-# in .env: DJANGO_SECRET_KEY, DJANGO_ALLOWED_HOSTS (and NAZRIA_DATABASE_URL, already there)
-python manage.py create_api_schema       # creates the schema "nazria_api" for Django's own tables (never "public")
-python manage.py migrate                 # API clients, admin users: all inside nazria_api
-python manage.py create_api_client android-app    # prints the app's API key once
-python manage.py createsuperuser         # optional: /admin/ for staff (API keys, consultation log)
-python manage.py runserver 0.0.0.0:8000  # development (Windows/PyCharm too)
+# in .env: DJANGO_SECRET_KEY, DJANGO_DEBUG=true (local), NAZRIA_DATABASE_URL (already there)
+python manage.py create_api_schema       # schema "nazria_api" for Django's tables (never "public")
+python manage.py migrate
+python manage.py create_api_client android-app                     # the app key (X-Api-Key), shown once
+python manage.py create_staff --phone 03XXXXXXXXX --name Admin --admin   # admin/Hakeem login (asks a password)
+python manage.py runserver 0.0.0.0:8000
 ```
 
-To reach a server on your PC from the Android emulator, use `http://10.0.2.2:8000/api/v1/`; that host is allowed
-by default when `DJANGO_DEBUG=true`.
+- Interactive API docs: `http://localhost:8000/api/docs/` (when `DJANGO_DEBUG=true`).
+- Admin: `/admin/` (log in with the phone number as `+92…`).
+- From the Android emulator: `http://10.0.2.2:8000/api/v1/`.
 
-**Production (Linux):**
+**Server:** Ubuntu with nginx, gunicorn and systemd, no Docker. The configuration files and step-by-step guide are
+in [`deploy/`](deploy/DEPLOY_UBUNTU.md).
 
-```bash
-gunicorn nazria_api.wsgi --workers 3 --timeout 120
-```
+**Tests:**
+- `pytest` runs every test, the API ones with SQLite and an in-memory knowledge base, so no PostgreSQL is needed.
+- With `NAZRIA_TEST_DATABASE_URL` set to a disposable database, the PostgreSQL tests run as well.
 
-- Keep the long timeout: AI explanations can take up to a minute.
-- Put the API behind HTTPS (for example nginx) and set `DJANGO_BEHIND_HTTPS_PROXY=true`.
-- Set `NAZRIA_API_CACHE=db` and run `python manage.py createcachetable`, so rate limits are shared by all workers.
-- Run `python manage.py collectstatic` for the admin pages.
-
-**Tests:** `pytest` runs the API tests with SQLite and an in-memory knowledge base, so no PostgreSQL is needed.
-With `NAZRIA_TEST_DATABASE_URL` set to a disposable database, `tests/api/test_postgres_backend.py` also checks the
-PostgreSQL path.
-
-**Batch jobs stay in the CLI** (`python -m nazria_kb build|load|verify|review|evaluate|export-training`). They are
-operator tools, not request-serving endpoints.
+**Batch jobs stay in the CLI** (`python -m nazria_kb build|load|verify|review|evaluate|export-training`).
 
 ## Using the data directly
 

@@ -1,15 +1,174 @@
 openapi: 3.0.3
 info:
   title: Nazria Mufrad Aza API
-  version: 1.0.0
-  description: Symptom questionnaire, book-based assessment and optional AI explanation
-    for the Android app. Guidance only, not a diagnosis.
+  version: 2.0.0
+  description: Patient accounts, symptom questionnaire, book-based assessment, pulse-video
+    analysis and optional AI explanation for the Android app, with a complete audit
+    log. Guidance only, not a diagnosis.
 paths:
+  /api/v1/auth/login/:
+    post:
+      operationId: v1_auth_login_create
+      description: 'Log in with phone + password: returns an access token (30 min)
+        and a refresh token (30 days).'
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokensOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/auth/logout/:
+    post:
+      operationId: v1_auth_logout_create
+      description: Invalidate a refresh token (log out on this phone).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/auth/refresh/:
+    post:
+      operationId: v1_auth_refresh_create
+      description: New access + refresh tokens for a valid refresh token (the old
+        refresh token stops working).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshInRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokensOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/auth/register/:
+    post:
+      operationId: v1_auth_register_create
+      description: Create a patient account (phone + password) and log in.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterInRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokensOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
   /api/v1/consultations/:
+    get:
+      operationId: v1_consultations_list
+      description: |-
+        GET: your consultation history, newest first. POST: submit all answers and get the assessment
+        (or the emergency referral); it is stored in your history.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedConsultationSummaryOutList'
+          description: ''
     post:
       operationId: v1_consultations_create
-      description: Submit all answers; returns the assessment (or the emergency referral).
-        Stored for later reading.
+      description: |-
+        GET: your consultation history, newest first. POST: submit all answers and get the assessment
+        (or the emergency referral); it is stored in your history.
       tags:
       - v1
       requestBody:
@@ -19,7 +178,7 @@ paths:
               $ref: '#/components/schemas/ConsultationRequestRequest'
         required: true
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '201':
           content:
@@ -39,18 +198,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorOut'
           description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
   /api/v1/consultations/{id}/:
     get:
       operationId: v1_consultations_retrieve
-      description: Read a stored consultation again, or delete it (the patient's data
-        is removed from the server).
+      description: One consultation. DELETE hides it from your history (everything
+        is kept on the server).
       parameters:
       - in: header
-        name: X-Consultation-Token
+        name: X-Api-Key
+        required: true
         schema:
           type: string
-        description: The access_token returned when the consultation was created
-        required: true
+        description: App key (python manage.py create_api_client NAME)
       - in: path
         name: id
         schema:
@@ -60,7 +226,7 @@ paths:
       tags:
       - v1
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '200':
           content:
@@ -76,15 +242,15 @@ paths:
           description: ''
     delete:
       operationId: v1_consultations_destroy
-      description: Read a stored consultation again, or delete it (the patient's data
-        is removed from the server).
+      description: One consultation. DELETE hides it from your history (everything
+        is kept on the server).
       parameters:
       - in: header
-        name: X-Consultation-Token
+        name: X-Api-Key
+        required: true
         schema:
           type: string
-        description: The access_token returned when the consultation was created
-        required: true
+        description: App key (python manage.py create_api_client NAME)
       - in: path
         name: id
         schema:
@@ -94,7 +260,7 @@ paths:
       tags:
       - v1
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '204':
           description: No response body
@@ -112,11 +278,11 @@ paths:
         Returns status "disabled" while the server runs with NAZRIA_ENGINE=questionnaire.
       parameters:
       - in: header
-        name: X-Consultation-Token
+        name: X-Api-Key
+        required: true
         schema:
           type: string
-        description: The access_token returned when the consultation was created
-        required: true
+        description: App key (python manage.py create_api_client NAME)
       - in: path
         name: id
         schema:
@@ -126,7 +292,7 @@ paths:
       tags:
       - v1
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '200':
           content:
@@ -167,15 +333,282 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthOut'
           description: ''
+  /api/v1/me/:
+    get:
+      operationId: v1_me_retrieve
+      description: The logged-in user's profile; PATCH changes name, gender or birth
+        year.
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+    patch:
+      operationId: v1_me_partial_update
+      description: The logged-in user's profile; PATCH changes name, gender or birth
+        year.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProfileInRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/me/activity/:
+    get:
+      operationId: v1_me_activity_list
+      description: Everything this account did (logins, consultations, pulse uploads
+        …), newest first.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditEventOutList'
+          description: ''
+  /api/v1/me/password/:
+    post:
+      operationId: v1_me_password_create
+      description: Change the password (all other sessions keep working until their
+        tokens expire).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/pulse/analyses/:
+    get:
+      operationId: v1_pulse_analyses_list
+      description: 'GET: your pulse analyses, newest first. POST (multipart): upload
+        a video and analyse it (takes seconds).'
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPulseAnalysisOutList'
+          description: ''
+    post:
+      operationId: v1_pulse_analyses_create
+      description: 'GET: your pulse analyses, newest first. POST (multipart): upload
+        a video and analyse it (takes seconds).'
+      tags:
+      - v1
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PulseUploadInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PulseAnalysisOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/pulse/analyses/{id}/:
+    get:
+      operationId: v1_pulse_analyses_retrieve
+      description: One pulse analysis. DELETE hides it from your history (it is kept
+        on the server).
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PulseAnalysisOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+    delete:
+      operationId: v1_pulse_analyses_destroy
+      description: One pulse analysis. DELETE hides it from your history (it is kept
+        on the server).
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+  /api/v1/pulse/symptom-suggestions/:
+    get:
+      operationId: v1_pulse_symptom_suggestions_retrieve
+      description: Free-text symptom suggestions for the pulse upload screen (from
+        the former pulse_diagnosis project).
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SymptomSuggestionsOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
   /api/v1/questionnaire/:
     get:
       operationId: v1_questionnaire_retrieve
       description: The questions and options the app shows, in order (as edited by
-        a Hakeem in the database).
+        a Hakeem in the database). No login needed.
       tags:
       - v1
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '200':
           content:
@@ -183,11 +616,139 @@ paths:
               schema:
                 $ref: '#/components/schemas/QuestionnaireOut'
           description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/staff/audit/:
+    get:
+      operationId: v1_staff_audit_list
+      description: The complete audit log (staff only).
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: query
+        name: action
+        schema:
+          type: string
+        description: exact action, or a prefix ending in '.' (e.g. auth.)
+      - in: query
+        name: object_id
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: since
+        schema:
+          type: string
+        description: ISO date-time
+      - in: query
+        name: until
+        schema:
+          type: string
+        description: ISO date-time
+      - in: query
+        name: user
+        schema:
+          type: integer
+        description: actor user id
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditEventOutList'
+          description: ''
+  /api/v1/staff/patients/:
+    get:
+      operationId: v1_staff_patients_list
+      description: All patients (search by phone or name), newest first.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: part of the phone number or name
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPatientRowOutList'
+          description: ''
+  /api/v1/staff/patients/{id}/:
+    get:
+      operationId: v1_staff_patients_retrieve
+      description: 'One patient''s complete history: profile, every consultation (hidden
+        ones too) and pulse analysis.'
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
   /api/v1/triage/:
     post:
       operationId: v1_triage_create
-      description: Emergency check for the first answers. Call it after the red-flag
-        question (and after the complaint).
+      description: |-
+        Emergency check for the first answers. Call it after the red-flag question (and after the complaint).
+        No login needed: an emergency must never wait for a login.
       tags:
       - v1
       requestBody:
@@ -197,7 +758,7 @@ paths:
               $ref: '#/components/schemas/TriageRequestRequest'
         required: true
       security:
-      - ApiKey: []
+      - jwtAuth: []
       responses:
         '200':
           content:
@@ -211,8 +772,27 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorOut'
           description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
 components:
   schemas:
+    ActorTypeEnum:
+      enum:
+      - patient
+      - hakeem
+      - admin
+      - anonymous
+      type: string
+      description: |-
+        * `patient` - patient
+        * `hakeem` - hakeem
+        * `admin` - admin
+        * `anonymous` - anonymous
     AssessmentOut:
       type: object
       properties:
@@ -260,6 +840,70 @@ components:
       - tehreek
       - totals
       - vulnerable
+    AuditEventOut:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        at:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+          format: uuid
+        actor:
+          type: integer
+          nullable: true
+        actor_phone:
+          type: string
+        actor_type:
+          $ref: '#/components/schemas/ActorTypeEnum'
+        action:
+          type: string
+          description: e.g. consultation.create, auth.login_failed
+          maxLength: 60
+        object_type:
+          type: string
+          maxLength: 30
+        object_id:
+          type: string
+          maxLength: 64
+        method:
+          type: string
+          maxLength: 8
+        path:
+          type: string
+          maxLength: 255
+        status_code:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        duration_ms:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        ip:
+          type: string
+          nullable: true
+        user_agent:
+          type: string
+          maxLength: 255
+        details: {}
+      required:
+      - action
+      - actor_type
+      - duration_ms
+      - id
+      - method
+      - path
+      - request_id
+      - status_code
+    BlankEnum:
+      enum:
+      - ''
     BookOut:
       type: object
       properties:
@@ -313,12 +957,11 @@ components:
         id:
           type: string
           format: uuid
-        access_token:
-          type: string
-          description: Returned once, on creation. Send it as X-Consultation-Token
-            to read, explain or delete this consultation
+        patient:
+          type: integer
+          description: User id of the patient
         status:
-          $ref: '#/components/schemas/ConsultationOutStatusEnum'
+          $ref: '#/components/schemas/ConsultationStatusEnum'
         created_at:
           type: string
           format: date-time
@@ -351,26 +994,27 @@ components:
         explanation_available:
           type: boolean
           description: True when the server can explain this result with AI
+        pulse_analyses:
+          type: array
+          items:
+            $ref: '#/components/schemas/PulseSummaryOut'
+        deleted:
+          type: boolean
       required:
       - advice
       - assessment
       - book
       - created_at
+      - deleted
       - disclaimer
       - emergency
       - explanation
       - explanation_available
       - id
+      - patient
+      - pulse_analyses
       - status
       - text
-    ConsultationOutStatusEnum:
-      enum:
-      - completed
-      - emergency
-      type: string
-      description: |-
-        * `completed` - completed
-        * `emergency` - emergency
     ConsultationRequestRequest:
       type: object
       properties:
@@ -382,6 +1026,44 @@ components:
             "پرانی قبض", "duration": "chronic", ...}'
       required:
       - answers
+    ConsultationStatusEnum:
+      enum:
+      - completed
+      - emergency
+      type: string
+      description: |-
+        * `completed` - completed
+        * `emergency` - emergency
+    ConsultationSummaryOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ConsultationStatusEnum'
+        created_at:
+          type: string
+          format: date-time
+        primary_system:
+          type: string
+          nullable: true
+        explanation_status:
+          type: string
+          nullable: true
+        complaint:
+          type: string
+        deleted:
+          type: boolean
+          description: Hidden by the patient (only staff see these)
+      required:
+      - complaint
+      - created_at
+      - deleted
+      - explanation_status
+      - id
+      - primary_system
+      - status
     EmergencyOut:
       type: object
       properties:
@@ -439,7 +1121,7 @@ components:
       type: object
       properties:
         status:
-          $ref: '#/components/schemas/ExplanationOutStatusEnum'
+          $ref: '#/components/schemas/ExplanationStatusEnum'
         text:
           type: string
           description: Only when status is shown
@@ -463,7 +1145,7 @@ components:
           description: Show to the patient when an external AI service was used
       required:
       - status
-    ExplanationOutStatusEnum:
+    ExplanationStatusEnum:
       enum:
       - shown
       - not_covered
@@ -477,6 +1159,16 @@ components:
         * `rejected` - rejected
         * `unavailable` - unavailable
         * `disabled` - disabled
+    GenderEnum:
+      enum:
+      - male
+      - female
+      - other
+      type: string
+      description: |-
+        * `male` - male
+        * `female` - female
+        * `other` - other
     HazardOut:
       type: object
       properties:
@@ -513,6 +1205,29 @@ components:
         * `single` - single
         * `multi` - multi
         * `text` - text
+    LoginInRequest:
+      type: object
+      properties:
+        phone:
+          type: string
+          minLength: 1
+          maxLength: 30
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 128
+      required:
+      - password
+      - phone
+    MethodEnum:
+      enum:
+      - finger
+      - wrist
+      type: string
+      description: |-
+        * `finger` - finger
+        * `wrist` - wrist
     OptionOut:
       type: object
       properties:
@@ -523,6 +1238,98 @@ components:
       required:
       - key
       - label
+    PaginatedAuditEventOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEventOut'
+    PaginatedConsultationSummaryOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsultationSummaryOut'
+    PaginatedPatientRowOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PatientRowOut'
+    PaginatedPulseAnalysisOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PulseAnalysisOut'
     PassageOut:
       type: object
       properties:
@@ -536,6 +1343,205 @@ components:
       - citation
       - context
       - excerpt
+    PasswordChangeInRequest:
+      type: object
+      properties:
+        old_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 128
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+          maxLength: 128
+      required:
+      - new_password
+      - old_password
+    PatchedProfileInRequest:
+      type: object
+      properties:
+        full_name:
+          type: string
+          maxLength: 150
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/GenderEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+          nullable: true
+    PatientRowOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        phone:
+          type: string
+        full_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+        consultations:
+          type: integer
+        pulse_analyses:
+          type: integer
+        is_active:
+          type: boolean
+      required:
+      - consultations
+      - created_at
+      - full_name
+      - id
+      - is_active
+      - last_login
+      - phone
+      - pulse_analyses
+    ProfileOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        phone:
+          type: string
+        full_name:
+          type: string
+        gender:
+          type: string
+        birth_year:
+          type: integer
+          nullable: true
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        consent_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - birth_year
+      - consent_at
+      - created_at
+      - full_name
+      - gender
+      - id
+      - phone
+      - role
+    PulseAnalysisOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient:
+          type: integer
+        consultation:
+          type: string
+          format: uuid
+          nullable: true
+        method:
+          type: string
+        status:
+          $ref: '#/components/schemas/PulseStatusEnum'
+        result:
+          type: object
+          additionalProperties: {}
+          description: Heart rate, HRV, pulse characteristics, waveform, signal quality
+            (see docs/API.md); empty when the analysis failed
+        error:
+          type: string
+        symptoms:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        processed_at:
+          type: string
+          format: date-time
+          nullable: true
+        disclaimer:
+          type: string
+          default: ''
+      required:
+      - consultation
+      - created_at
+      - error
+      - id
+      - method
+      - patient
+      - processed_at
+      - result
+      - status
+      - symptoms
+    PulseStatusEnum:
+      enum:
+      - processing
+      - completed
+      - failed
+      type: string
+      description: |-
+        * `processing` - processing
+        * `completed` - completed
+        * `failed` - failed
+    PulseSummaryOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        method:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        average_heart_rate_bpm:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - average_heart_rate_bpm
+      - created_at
+      - id
+      - method
+      - status
+    PulseUploadInRequest:
+      type: object
+      properties:
+        video:
+          type: string
+          format: binary
+          description: Finger-on-lens (or wrist) video, 30–60 s; mp4, mov, 3gp, webm,
+            mkv
+        method:
+          allOf:
+          - $ref: '#/components/schemas/MethodEnum'
+          default: finger
+        consultation:
+          type: string
+          format: uuid
+          nullable: true
+          description: Link to one of your consultations (optional)
+        symptoms:
+          type: string
+          description: 'Optional free-text symptoms: JSON list ["…", "…"] or comma
+            separated'
+          maxLength: 4000
+      required:
+      - video
     QuestionOut:
       type: object
       properties:
@@ -598,7 +1604,7 @@ components:
       type: object
       properties:
         status:
-          $ref: '#/components/schemas/RecipeOutStatusEnum'
+          $ref: '#/components/schemas/RecipeStatusEnum'
         text:
           type: string
           nullable: true
@@ -619,7 +1625,7 @@ components:
       - message
       - status
       - text
-    RecipeOutStatusEnum:
+    RecipeStatusEnum:
       enum:
       - shown
       - withheld_vulnerable
@@ -629,6 +1635,56 @@ components:
         * `shown` - shown
         * `withheld_vulnerable` - withheld_vulnerable
         * `withheld_hazard` - withheld_hazard
+    RefreshInRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    RegisterInRequest:
+      type: object
+      properties:
+        phone:
+          type: string
+          minLength: 1
+          description: 'Any common format: 0300-1234567, +923001234567 …'
+          maxLength: 30
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+          maxLength: 128
+        full_name:
+          type: string
+          maxLength: 150
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/GenderEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+          nullable: true
+        consent:
+          type: boolean
+          description: The patient accepted the disclaimer (guidance, not diagnosis)
+      required:
+      - consent
+      - password
+      - phone
+    RoleEnum:
+      enum:
+      - patient
+      - hakeem
+      - admin
+      type: string
+      description: |-
+        * `patient` - patient
+        * `hakeem` - hakeem
+        * `admin` - admin
     SkipIfOut:
       type: object
       properties:
@@ -659,6 +1715,32 @@ components:
         * `triage` - triage
         * `profile` - profile
         * `signs` - signs
+    SymptomSuggestionsOut:
+      type: object
+      properties:
+        symptom_categories:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+      required:
+      - symptom_categories
+    TokensOut:
+      type: object
+      properties:
+        access:
+          type: string
+          description: 'Send as Authorization: Bearer <access> (valid 30 minutes)'
+        refresh:
+          type: string
+          description: Exchange at /auth/refresh/ for new tokens (valid 30 days)
+        user:
+          $ref: '#/components/schemas/ProfileOut'
+      required:
+      - access
+      - refresh
+      - user
     TopicOut:
       type: object
       properties:
@@ -712,9 +1794,7 @@ components:
       required:
       - red_flags
   securitySchemes:
-    ApiKey:
-      type: apiKey
-      in: header
-      name: Authorization
-      description: 'Value: "Api-Key nzr_…" (create keys with: python manage.py create_api_client
-        NAME)'
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

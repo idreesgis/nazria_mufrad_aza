@@ -26,11 +26,52 @@ def kb(_fresh):
 
 
 @pytest.fixture
-def api(db):
-    _, key = ApiClient.create("android-test")
+def app_key(db):
+    return ApiClient.create("android-test")[1]
+
+
+@pytest.fixture
+def anon(app_key):
+    """The app before login: app key only."""
     c = APIClient()
-    c.credentials(HTTP_AUTHORIZATION=f"Api-Key {key}")
+    c.credentials(HTTP_X_API_KEY=app_key)
     return c
+
+
+def make_user(phone="+923001234567", password="sabz-chai-2026", name="Test Patient", staff=False, admin=False):
+    from django.contrib.auth import get_user_model
+
+    from accounts.models import PatientProfile, hakeem_group
+    user = get_user_model().objects.create_user(username=phone, password=password, is_staff=staff or admin,
+                                                is_superuser=admin)
+    if staff or admin:
+        user.groups.add(hakeem_group())
+    PatientProfile.objects.create(user=user, phone=phone, full_name=name)
+    return user
+
+
+def logged_in(app_key, user) -> APIClient:
+    from accounts.views import tokens_for
+    c = APIClient()
+    c.credentials(HTTP_X_API_KEY=app_key, HTTP_AUTHORIZATION=f"Bearer {tokens_for(user)['access']}")
+    c.user = user
+    return c
+
+
+@pytest.fixture
+def patient_user(db):
+    return make_user()
+
+
+@pytest.fixture
+def api(app_key, patient_user):
+    """A logged-in patient."""
+    return logged_in(app_key, patient_user)
+
+
+@pytest.fixture
+def hakeem(app_key, db):
+    return logged_in(app_key, make_user("+923331112223", name="Hakeem Sahib", staff=True))
 
 
 # the reference consultation of the CLI: chronic constipation, adult, muscular signs
