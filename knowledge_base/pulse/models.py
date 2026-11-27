@@ -1,4 +1,4 @@
-"""Pulse (نبض) videos and their PPG analysis, owned by the patient who uploaded them (kept permanently)."""
+"""Pulse (نبض) videos and their PPG analysis, for one patient of the account that uploaded them (kept permanently)."""
 from __future__ import annotations
 
 import os
@@ -19,7 +19,8 @@ class PulseAnalysis(models.Model):
     METHODS = [("finger", "finger on the camera lens"), ("wrist", "traditional wrist nabz, four fingers")]
     STATUSES = [("processing", "processing"), ("completed", "completed"), ("failed", "failed")]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    patient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pulse_analyses")
+    account = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="pulse_analyses")
+    patient = models.ForeignKey("patients.Patient", null=True, on_delete=models.PROTECT, related_name="pulse_analyses")
     consultation = models.ForeignKey("consultations.Consultation", null=True, blank=True, on_delete=models.PROTECT,
                                      related_name="pulse_analyses")
     method = models.CharField(max_length=10, choices=METHODS, default="finger")

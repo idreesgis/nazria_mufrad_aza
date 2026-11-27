@@ -157,6 +157,7 @@ This is a single Django project: Django 5.2 LTS, Django REST Framework, JWT logi
 |---|---|
 | `accounts` | Patients register and log in with phone + password or **Sign in with Google** (JWT); Hakeem/admin roles; profile; consent record. |
 | `consultations` | Questionnaire, emergency triage, book-based assessment (the same `nazria_kb` code as the CLI), each patient's history, AI explanation (off until `NAZRIA_ENGINE=hybrid`). |
+| `patients` | The patients of an account (self, family): general info, its change history, prefilled questionnaire answers and re-diagnosis. |
 | `pulse` | Pulse-video (PPG) upload and analysis. It was the separate `pulse_diagnosis` project and is now part of this API. |
 | `audit` | One append-only log row per API or admin request: who, what, when, IP and result. The database refuses changes to it. |
 

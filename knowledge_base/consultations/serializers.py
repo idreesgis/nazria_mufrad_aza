@@ -13,7 +13,26 @@ class TriageRequest(serializers.Serializer):
 class ConsultationRequest(serializers.Serializer):
     answers = serializers.DictField(
         help_text='{question_id: answer}. Single choice: option key; multiple choice: list of keys; text: string. '
-                  'Example: {"red_flags": ["none"], "complaint": "پرانی قبض", "duration": "chronic", ...}')
+                  'Example: {"red_flags": ["none"], "complaint": "پرانی قبض", "duration": "chronic", ...}. '
+                  'The questions in the patient\'s prefilled_questions may be left out: the server fills them.')
+    patient_id = serializers.UUIDField(required=False, allow_null=True,
+                                       help_text="An existing patient of this account (re-diagnosis)")
+    new_patient = serializers.DictField(required=False, allow_null=True,
+                                        help_text="A new patient's general info (GET /patients/intake-form/), "
+                                                  "created together with this diagnosis")
+
+    def validate(self, data):
+        if data.get("patient_id") and data.get("new_patient"):
+            raise serializers.ValidationError({"patient_id": "send patient_id or new_patient, not both"})
+        return data
+
+
+class RediagnoseRequest(serializers.Serializer):
+    answers = serializers.DictField(required=False, default=dict,
+                                    help_text="Only the answers that changed since the earlier diagnosis "
+                                              "(e.g. {\"urine_color\": \"yellow\"}); all others are reused")
+    patient_id = serializers.UUIDField(required=False, allow_null=True,
+                                       help_text="Needed only when the earlier diagnosis has no patient")
 
 
 # ---------------------------------------------------------------- responses
@@ -94,7 +113,7 @@ class HazardOut(serializers.Serializer):
 
 
 class RecipeOut(serializers.Serializer):
-    status = serializers.ChoiceField(choices=["shown", "withheld_vulnerable", "withheld_hazard"])
+    status = serializers.ChoiceField(choices=["shown", "withheld_vulnerable", "withheld_condition", "withheld_hazard"])
     text = serializers.CharField(allow_null=True)
     dosage = serializers.CharField(allow_null=True)
     hazards = HazardOut(many=True)
@@ -147,10 +166,18 @@ class PulseSummaryOut(serializers.Serializer):
     average_heart_rate_bpm = serializers.FloatField(allow_null=True)
 
 
+class PatientRefOut(serializers.Serializer):
+    id = serializers.UUIDField()
+    full_name = serializers.CharField()
+    relation = serializers.CharField()
+
+
 class ConsultationSummaryOut(serializers.Serializer):
     id = serializers.UUIDField()
     status = serializers.ChoiceField(choices=["completed", "emergency"])
     created_at = serializers.DateTimeField()
+    patient = PatientRefOut(allow_null=True)
+    rediagnosis_of = serializers.UUIDField(allow_null=True)
     primary_system = serializers.CharField(allow_null=True)
     explanation_status = serializers.CharField(allow_null=True)
     complaint = serializers.CharField()
@@ -159,7 +186,12 @@ class ConsultationSummaryOut(serializers.Serializer):
 
 class ConsultationOut(serializers.Serializer):
     id = serializers.UUIDField()
-    patient = serializers.IntegerField(help_text="User id of the patient")
+    account = serializers.IntegerField(help_text="User id of the account the patient belongs to")
+    patient = serializers.DictField(allow_null=True, help_text="The patient's general info AT THE TIME of this "
+                                    "diagnosis (see PatientSnapshotOut); null only for an emergency without patient")
+    rediagnosis_of = serializers.UUIDField(allow_null=True, help_text="The earlier diagnosis this one re-ran")
+    prefilled_answers = serializers.DictField(child=serializers.CharField(),
+                                              help_text="Answers the server took from the patient's info")
     status = serializers.ChoiceField(choices=["completed", "emergency"])
     created_at = serializers.DateTimeField()
     emergency = EmergencyOut(allow_null=True)

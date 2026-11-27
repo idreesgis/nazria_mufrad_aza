@@ -1,7 +1,7 @@
 # Nazria REST API: guide for the Android app
 
 This is the single backend for the app. It provides:
-- patient accounts (phone + password, or Sign in with Google);
+- accounts (phone + password, or Sign in with Google), each with **many patients** (self, children, parents…);
 - the book-based symptom questionnaire and assessment;
 - pulse (نبض) video analysis;
 - an optional AI explanation;
@@ -84,19 +84,67 @@ must be configured first):
    (`./gradlew signingReport`; add the debug, release and Play App Signing SHA-1s). This one is not used in code:
    it lets Google issue tokens to the app.
 
+## Patients: one account, many patients
+
+The logged-in user (the **account**) diagnoses one or more **patients**: themselves, their children, parents and so
+on. Every diagnosis and pulse analysis belongs to one patient.
+
+```
+GET  /patients/                          the account's patients (?search=name)
+GET  /patients/intake-form/              (app key only) the general-info form to ask for a NEW patient
+POST /patients/        {general info, "consent": true}      → 201 the patient
+GET  /patients/{id}/   · PATCH /patients/{id}/ {fields}     · DELETE /patients/{id}/ (hides it; everything is kept)
+GET  /patients/{id}/history/             every change to the general info: who, when, which fields, the info after
+```
+
+- **General info** (`intake-form` gives the Urdu labels, kinds, options and limits, in order):
+  - required: `full_name`, `relation` (`self`, `spouse`, `child`, `parent`, `sibling`, `relative`, `other`),
+    `gender`, `birth_year`, and `consent: true`;
+  - optional: `weight_kg`, `height_cm`, `chronic_conditions` (`diabetes`, `hypertension`, `heart`, `kidney`,
+    `liver`, `asthma`, `thyroid`, `epilepsy`, `other`, or `none`), `conditions_other`, `allergies`, `medications`,
+    `notes`.
+- **Consent:** the account holder confirms they may record this patient's data (as guardian, for a child).
+- **The answer** also has `age`, `age_group`, `bmi`, `consultations`, `pulse_analyses`, `last_consultation_at` and
+  `prefilled_questions`.
+- **Info used by the diagnosis:**
+  - `age_group` comes from `birth_year`.
+  - `pregnancy` is `"na"` for male patients and children.
+  - These questions are in `prefilled_questions`: don't ask them. If the app sends them anyway, the patient's info
+    wins.
+  - Kidney, liver or heart disease: no book recipe is shown (`recipe.status = "withheld_condition"`).
+  - Medicines or allergies add a caution to `advice`.
+- **History is never overwritten:**
+  - Each diagnosis stores the patient's info as it was at that time (`patient` in the result).
+  - Each change to the info is kept in `/history/`.
+
 ## Consultation flow
 
 ```
+0. choose the patient: an existing one (GET /patients/), or a NEW one → ask the intake form first
 1. GET  /questionnaire/                 (app key only) questions to show; cache by "version"
 2. red-flag question → POST /triage/ {"red_flags":[...]}            (app key only) emergency? show "message", STOP
 3. complaint        → POST /triage/ {"red_flags":[...],"complaint"}  (the text is screened too)
-4. remaining questions (skip a question when its skip_if matches)
-5. POST /consultations/ {"answers": {...}}             → the result, saved in the patient's history
+4. remaining questions (skip a question when its skip_if matches, and the patient's prefilled_questions)
+5. POST /consultations/ {"answers": {...}, "patient_id": "…"}        existing patient
+   POST /consultations/ {"answers": {...}, "new_patient": {intake}}  new patient, created with this diagnosis
+                                                       → the result, saved in the patient's history
 6. optional: POST /consultations/{id}/explanation/     → AI explanation (10–30 s)
-7. optional: POST /pulse/analyses/ (video, consultation={id}) → pulse analysis linked to the consultation
+7. optional: POST /pulse/analyses/ (video, patient={id} or consultation={id}) → pulse analysis of that patient
 ```
 
-Triage and the questionnaire need no login: an emergency must never wait for one.
+- **No login for triage and the questionnaire:** an emergency must never wait for one. An emergency result is also
+  stored without a patient.
+- **A completed diagnosis needs a patient:** without one the answer is `400 patient_required`.
+
+**Re-diagnosis.** Two ways:
+- **A new diagnosis of an existing patient:** `POST /consultations/ {"answers", "patient_id"}`.
+- **Repeat an earlier diagnosis:** `POST /consultations/{id}/rediagnose/ {"answers": {only the changed answers}}`
+  → `201`. It works like this:
+  - The earlier answers are reused, and the patient's **current** info and the current book are applied.
+  - A new diagnosis is stored with `rediagnosis_of = {id}`; the earlier one stays unchanged.
+  - Send `{}` to run it again unchanged, for example after a Hakeem edited the questions, or the patient's info
+    changed.
+  - If the earlier diagnosis was an emergency without a patient, add `"patient_id"`.
 
 ## Endpoints
 
@@ -109,17 +157,22 @@ Triage and the questionnaire need no login: an emergency must never wait for one
 | `POST /auth/logout/` · `GET`/`PATCH /me/` · `POST /me/password/` | user | Account. |
 | `POST`/`DELETE /me/google/` | patient | Link or unlink a Google account. |
 | `GET /me/activity/` | user | The patient's own audit trail, newest first. |
-| `GET /consultations/` | user | History: `[{"id","status","created_at","primary_system","explanation_status","complaint","deleted"}]` |
-| `POST /consultations/` | user | All answers in → the full result (`201`). |
+| `GET`/`POST /patients/` · `GET`/`PATCH`/`DELETE /patients/{id}/` · `GET /patients/{id}/history/` | user | The account's patients and their general info (see *Patients*). |
+| `GET /patients/intake-form/` | app | The general-info form for a new patient. |
+| `GET /consultations/?patient=` | user | History: `[{"id","status","created_at","patient":{"id","full_name","relation"},"rediagnosis_of","primary_system","explanation_status","complaint","deleted"}]` |
+| `POST /consultations/` | user | All answers and `patient_id` or `new_patient` → the full result (`201`). |
+| `POST /consultations/{id}/rediagnose/` | owner, staff | Re-diagnose with the changed answers → a new result (`201`). |
 | `GET /consultations/{id}/` | owner, staff | The full result again, with linked `pulse_analyses` and any `explanation`. |
 | `DELETE /consultations/{id}/` | owner, staff | Hides it from the patient's history. **Everything is kept** on the server, and staff still see it. |
 | `POST /consultations/{id}/explanation/` | owner, staff | AI explanation (`status`: `shown`, `not_covered`, `rejected`, `unavailable` or `disabled`). |
-| `GET /pulse/analyses/` | user | The patient's pulse analyses. |
-| `POST /pulse/analyses/` | user | Multipart: `video` (mp4, mov, 3gp, webm or mkv; ≤ 100 MB), `method` (`finger` or `wrist`), `consultation` (optional id), `symptoms` (optional JSON list). Analysed immediately (`201`). |
+| `GET /pulse/analyses/?patient=` | user | The account's pulse analyses. |
+| `POST /pulse/analyses/` | user | Multipart: `video` (mp4, mov, 3gp, webm or mkv; ≤ 100 MB), `method` (`finger` or `wrist`), `patient` (id; or `consultation`, whose patient is used), `symptoms` (optional JSON list). Analysed immediately (`201`). |
 | `GET /pulse/analyses/{id}/` · `DELETE …` | owner, staff | One analysis. DELETE hides it; the video is kept. |
 | `GET /pulse/symptom-suggestions/` | user | Free-text symptom lists (English). |
-| `GET /staff/patients/?search=` | staff | Patients with consultation and pulse counts (search by phone, name or e-mail). |
-| `GET /staff/patients/{id}/` | staff | A patient's complete history: profile, every consultation and pulse analysis, hidden ones included. |
+| `GET /staff/accounts/?search=` | staff | Accounts with patient, consultation and pulse counts (search by phone, name or e-mail). |
+| `GET /staff/accounts/{id}/` | staff | An account's complete history: profile, its patients, every consultation and pulse analysis, hidden ones included. |
+| `GET /staff/patients/?search=` | staff | All patients (search by patient name or the account's phone, name or e-mail). |
+| `GET /staff/patients/{id}/` | staff | A patient's complete history: info, every change to it, every diagnosis and pulse analysis, hidden ones included. |
 | `GET /staff/audit/?user=&action=&object_id=&since=&until=` | staff | The complete audit log. `action` can be a prefix ending in `.`, for example `auth.`. |
 
 **Roles:** `user.role` is `patient`, `hakeem` or `admin`. Staff accounts are created on the server with
@@ -142,7 +195,11 @@ Triage and the questionnaire need no login: an emergency must never wait for one
 ### Consultation result (`POST /consultations/`)
 
 ```json
-{"id": "6f0c…", "patient": 12, "status": "completed", "created_at": "…", "emergency": null,
+{"id": "6f0c…", "account": 12, "rediagnosis_of": null, "status": "completed", "created_at": "…", "emergency": null,
+ "patient": {"id": "a41e…", "full_name": "…", "relation": "child", "gender": "female", "birth_year": 2019, "age": 7,
+             "age_group": "child", "weight_kg": 18.5, "height_cm": null, "bmi": null, "chronic_conditions": [],
+             "conditions_other": "", "allergies": "", "medications": ""},
+ "prefilled_answers": {"age_group": "child", "pregnancy": "na"},
  "assessment": {"conclusive": true, "primary_system": "عضلاتی", "primary_organs": "قلب و عضلات", "tehreek": null,
                 "mizaj": null, "confidence": 1.0, "totals": {"اعصابی": 0, "عضلاتی": 8, "غدی": 0}, "vulnerable": false,
                 "evidence": [{"question_id": "urine_color", "option_key": "red", "answer": "سرخ یا سرخی مائل",
@@ -159,6 +216,7 @@ Triage and the questionnaire need no login: an emergency must never wait for one
 |---|---|
 | `shown` | `text` (and `dosage`, if the book gives one) can be shown. |
 | `withheld_vulnerable` | Child, elderly or pregnant patient: show `message` instead. |
+| `withheld_condition` | The patient has kidney, liver or heart disease (general info): show `message`. |
 | `withheld_hazard` | The recipe contains سنکھیا, پارہ, کشتہ or similar: show `message`. `hazards` lists what was found. |
 
 An emergency result has `"status": "emergency"` and `"emergency": {"flags", "flag_labels", "message"}`;
@@ -167,7 +225,7 @@ An emergency result has `"status": "emergency"` and `"emergency": {"flags", "fla
 ### Pulse analysis (`POST /pulse/analyses/`)
 
 ```json
-{"id": "…", "patient": 12, "consultation": "6f0c…", "method": "finger", "status": "completed",
+{"id": "…", "account": 12, "patient": "a41e…", "consultation": "6f0c…", "method": "finger", "status": "completed",
  "result": {"average_heart_rate_bpm": 74.9, "resting_heart_rate_bpm": 69.9, "heart_rate_variability_ms": 227.4,
             "pulse_characteristics": {"rhythm": "…", "strength": "…", "volume": "…", "tension": "…"},
             "waveform_analysis": {…}, "signal_quality": "moderate", "total_beats_detected": 25, …},
@@ -180,7 +238,10 @@ keep the finger still on the lens". Always show the `disclaimer`. The analysis i
 
 ## History and audit
 
-- **Nothing is deleted automatically.** A patient's "delete" only hides an item from their own history.
+- **Nothing is deleted automatically.** "Delete" only hides an item (a patient, a diagnosis, a pulse analysis) from
+  the account; staff still see it.
+- **Patient info history:** every change to a patient's general info is kept (`/patients/{id}/history/`), and each
+  diagnosis keeps the info it was made with.
 - **Every API and admin request is written to the audit log:**
   - who: the user, their role and the app key;
   - what: the action and the object id;
@@ -195,6 +256,7 @@ Every error has the same shape: `{"error": "<code>", "detail": "<message>", "fie
 | HTTP | `error` | Meaning |
 |---|---|---|
 | 400 | `invalid_answers`, `invalid_request` | Validation failed. `fields` lists each problem. |
+| 400 | `patient_required`, `invalid_patient` | Choose a patient or add one; `invalid_patient`: `fields` names the `new_patient.*` problems. |
 | 400 | `consent_required`, `google_email_unverified` | Google sign-in: show the disclaimer and resend with `consent: true`; or use another Google account. |
 | 401 | `not_authenticated`, `token_not_valid`, `invalid_credentials`, `invalid_token`, `invalid_google_token` | Log in, or refresh the token; for Google, get a new ID token. |
 | 403 | `app_key_invalid`, `permission_denied`, `staff_password_only`, `account_disabled` | The app key is missing or wrong, the endpoint is for staff only, or the account cannot sign in this way. |

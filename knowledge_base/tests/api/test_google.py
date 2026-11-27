@@ -187,7 +187,7 @@ def test_phone_taken_by_other_account(app_key, anon, patient_user):
 
 def test_staff_list_shows_google_patient(app_key, anon, hakeem):
     g(anon, consent=True)
-    rows = hakeem.get("/api/v1/staff/patients/?search=amina@").json()["results"]
+    rows = hakeem.get("/api/v1/staff/accounts/?search=amina@").json()["results"]
     assert len(rows) == 1 and rows[0]["phone"] is None and rows[0]["email"] == "amina@gmail.com"
 
 

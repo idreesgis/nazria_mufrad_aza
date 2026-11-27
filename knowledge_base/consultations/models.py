@@ -58,12 +58,18 @@ class ApiClient(models.Model):
 
 
 class Consultation(models.Model):
-    """One consultation of a patient: owner, status and a few summary fields. The full content (answers, result,
-    transcript, AI explanation) is in nazria.consultation_sessions / consultation_messages. Kept permanently;
-    a patient's "delete" only hides it from their history (deleted_at)."""
+    """One diagnosis of a patient: the account that ran it, the patient it was for (and their general info at the
+    time), status and a few summary fields. The full content (answers, result, transcript, AI explanation) is in
+    nazria.consultation_sessions / consultation_messages. Kept permanently; "delete" only hides it (deleted_at)."""
     session_uid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    patient = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+    account = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
                                 related_name="consultations")
+    patient = models.ForeignKey("patients.Patient", null=True, on_delete=models.PROTECT,
+                                related_name="consultations")
+    patient_snapshot = models.JSONField(default=dict, blank=True,
+                                        help_text="the patient's general info when this diagnosis was made")
+    rediagnosis_of = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT,
+                                       related_name="rediagnoses")
     client = models.ForeignKey(ApiClient, null=True, on_delete=models.SET_NULL, related_name="consultations")
     status = models.CharField(max_length=20)                     # completed | emergency
     primary_system = models.CharField(max_length=20, blank=True)
@@ -75,7 +81,9 @@ class Consultation(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["created_at"]), models.Index(fields=["patient", "created_at"])]
+        indexes = [models.Index(fields=["created_at"]),
+                   models.Index(fields=["account", "created_at"], name="consultatio_account_idx"),
+                   models.Index(fields=["patient", "created_at"], name="consultation_patient_idx")]
 
     def __str__(self) -> str:
         return f"{self.session_uid} {self.status}"

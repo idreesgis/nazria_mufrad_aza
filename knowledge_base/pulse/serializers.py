@@ -10,8 +10,10 @@ from .service import ALLOWED_EXTENSIONS
 class PulseUploadIn(serializers.Serializer):
     video = serializers.FileField(help_text="Finger-on-lens (or wrist) video, 30–60 s; mp4, mov, 3gp, webm, mkv")
     method = serializers.ChoiceField(choices=["finger", "wrist"], default="finger")
+    patient = serializers.UUIDField(required=False, allow_null=True,
+                                    help_text="The patient (required unless consultation is given)")
     consultation = serializers.UUIDField(required=False, allow_null=True,
-                                         help_text="Link to one of your consultations (optional)")
+                                         help_text="Link to one of your consultations (its patient is used)")
     symptoms = serializers.CharField(required=False, allow_blank=True, max_length=4000,
                                      help_text='Optional free-text symptoms: JSON list ["…", "…"] or comma separated')
 
@@ -38,7 +40,8 @@ class PulseUploadIn(serializers.Serializer):
 
 class PulseAnalysisOut(serializers.Serializer):
     id = serializers.UUIDField()
-    patient = serializers.IntegerField(source="patient_id")
+    account = serializers.IntegerField(source="account_id")
+    patient = serializers.UUIDField(source="patient_id", allow_null=True)
     consultation = serializers.UUIDField(source="consultation_id", allow_null=True)
     method = serializers.CharField()
     status = serializers.ChoiceField(choices=["processing", "completed", "failed"])

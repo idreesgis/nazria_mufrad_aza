@@ -13,7 +13,7 @@ pytestmark = pytest.mark.django_db
 def test_every_request_is_logged_with_actor_action_and_result(anon, api, patient_user):
     anon.post("/api/v1/auth/login/", {"phone": "03001234567", "password": "wrong-pass"}, format="json")
     anon.post("/api/v1/auth/login/", {"phone": "03001234567", "password": "sabz-chai-2026"}, format="json")
-    r = api.post("/api/v1/consultations/", {"answers": REFERENCE}, format="json")
+    r = api.post("/api/v1/consultations/", {"answers": REFERENCE, "patient_id": str(api.patient.id)}, format="json")
     api.get(f"/api/v1/consultations/{r.data['id']}/")
     events = list(AuditEvent.objects.order_by("id"))
     actions = [e.action for e in events]
@@ -22,7 +22,8 @@ def test_every_request_is_logged_with_actor_action_and_result(anon, api, patient
     assert failed.actor is None and failed.details == {"phone": "+923001234567"} and failed.status_code == 401
     assert ok.actor == patient_user and ok.status_code == 200 and ok.api_client.name == "android-test"
     assert created.actor == patient_user and created.actor_type == "patient" and created.object_id == r.data["id"]
-    assert created.details == {"status": "completed", "primary_system": "عضلاتی"} and created.ip == "127.0.0.1"
+    assert created.details == {"status": "completed", "primary_system": "عضلاتی",
+                               "patient": str(api.patient.id)} and created.ip == "127.0.0.1"
     dump = json.dumps(list(AuditEvent.objects.values()), default=str, ensure_ascii=False)
     for secret in ("sabz-chai-2026", "wrong-pass", "قبض", "Bearer"):           # no passwords, tokens or symptoms
         assert secret not in dump

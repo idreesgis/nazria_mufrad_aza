@@ -200,8 +200,9 @@ paths:
     get:
       operationId: v1_consultations_list
       description: |-
-        GET: your consultation history, newest first. POST: submit all answers and get the assessment
-        (or the emergency referral); it is stored in your history.
+        GET: the account's diagnoses, newest first (?patient=<id> for one patient). POST: diagnose a patient: send all
+        answers with either patient_id (an existing patient: re-diagnosis) or new_patient (their general info, asked
+        first for a new patient). Returns the assessment (or the emergency referral), stored in the patient's history.
       parameters:
       - in: header
         name: X-Api-Key
@@ -215,6 +216,12 @@ paths:
         description: A page number within the paginated result set.
         schema:
           type: integer
+      - in: query
+        name: patient
+        schema:
+          type: string
+          format: uuid
+        description: only this patient
       tags:
       - v1
       security:
@@ -229,8 +236,9 @@ paths:
     post:
       operationId: v1_consultations_create
       description: |-
-        GET: your consultation history, newest first. POST: submit all answers and get the assessment
-        (or the emergency referral); it is stored in your history.
+        GET: the account's diagnoses, newest first (?patient=<id> for one patient). POST: diagnose a patient: send all
+        answers with either patient_id (an existing patient: re-diagnosis) or new_patient (their general info, asked
+        first for a new patient). Returns the assessment (or the emergency referral), stored in the patient's history.
       tags:
       - v1
       requestBody:
@@ -249,6 +257,12 @@ paths:
                 $ref: '#/components/schemas/ConsultationOut'
           description: ''
         '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '404':
           content:
             application/json:
               schema:
@@ -376,6 +390,54 @@ paths:
           description: ''
         '429':
           description: too many explanation requests
+  /api/v1/consultations/{id}/rediagnose/:
+    post:
+      operationId: v1_consultations_rediagnose_create
+      description: |-
+        Diagnose the same patient again from an earlier diagnosis: its answers are reused, the ones sent here replace
+        them, and the patient's CURRENT general info and the current book are used. A new diagnosis is stored (linked by
+        rediagnosis_of); the earlier one stays unchanged.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RediagnoseRequestRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsultationOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
   /api/v1/health/:
     get:
       operationId: v1_health_retrieve
@@ -606,11 +668,11 @@ paths:
         schema:
           type: string
         description: App key (python manage.py create_api_client NAME)
-  /api/v1/pulse/analyses/:
+  /api/v1/patients/:
     get:
-      operationId: v1_pulse_analyses_list
-      description: 'GET: your pulse analyses, newest first. POST (multipart): upload
-        a video and analyse it (takes seconds).'
+      operationId: v1_patients_list
+      description: 'GET: the account''s patients (search by name). POST: add a patient
+        (general info + consent).'
       parameters:
       - in: header
         name: X-Api-Key
@@ -618,6 +680,193 @@ paths:
         schema:
           type: string
         description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: part of the name
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPatientOutList'
+          description: ''
+    post:
+      operationId: v1_patients_create
+      description: 'GET: the account''s patients (search by name). POST: add a patient
+        (general info + consent).'
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatientInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/patients/{id}/:
+    get:
+      operationId: v1_patients_retrieve
+      description: |-
+        One patient with their diagnoses and pulse analyses. PATCH updates the general info (every change is kept in
+        /history/). DELETE hides the patient from the account; everything is kept.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+    patch:
+      operationId: v1_patients_partial_update
+      description: |-
+        One patient with their diagnoses and pulse analyses. PATCH updates the general info (every change is kept in
+        /history/). DELETE hides the patient from the account; everything is kept.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedPatientInRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+    delete:
+      operationId: v1_patients_destroy
+      description: |-
+        One patient with their diagnoses and pulse analyses. PATCH updates the general info (every change is kept in
+        /history/). DELETE hides the patient from the account; everything is kept.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+  /api/v1/patients/{id}/history/:
+    get:
+      operationId: v1_patients_history_list
+      description: Every change to the patient's general info, newest first (who,
+        when, which fields, the info after it).
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
       - name: page
         required: false
         in: query
@@ -633,12 +882,79 @@ paths:
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/PaginatedRevisionOutList'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+  /api/v1/patients/intake-form/:
+    get:
+      operationId: v1_patients_intake_form_retrieve
+      description: |-
+        The general-info form to show before the first diagnosis of a NEW patient (Urdu labels, in order).
+        Send the answers to POST /patients/ (or as "new_patient" in POST /consultations/).
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntakeFormOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+  /api/v1/pulse/analyses/:
+    get:
+      operationId: v1_pulse_analyses_list
+      description: |-
+        GET: the account's pulse analyses, newest first (?patient=<id> for one patient). POST (multipart): upload a
+        patient's video and analyse it (takes seconds).
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: patient
+        schema:
+          type: string
+          format: uuid
+        description: only this patient
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
                 $ref: '#/components/schemas/PaginatedPulseAnalysisOutList'
           description: ''
     post:
       operationId: v1_pulse_analyses_create
-      description: 'GET: your pulse analyses, newest first. POST (multipart): upload
-        a video and analyse it (takes seconds).'
+      description: |-
+        GET: the account's pulse analyses, newest first (?patient=<id> for one patient). POST (multipart): upload a
+        patient's video and analyse it (takes seconds).
       tags:
       - v1
       requestBody:
@@ -780,6 +1096,74 @@ paths:
         schema:
           type: string
         description: App key (python manage.py create_api_client NAME)
+  /api/v1/staff/accounts/:
+    get:
+      operationId: v1_staff_accounts_list
+      description: All accounts (search by phone, name or e-mail), newest first.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: part of the phone number, name or e-mail
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAccountRowOutList'
+          description: ''
+  /api/v1/staff/accounts/{id}/:
+    get:
+      operationId: v1_staff_accounts_retrieve
+      description: 'One account: profile, its patients (hidden ones too), every consultation
+        and pulse analysis.'
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
   /api/v1/staff/audit/:
     get:
       operationId: v1_staff_audit_list
@@ -835,7 +1219,8 @@ paths:
   /api/v1/staff/patients/:
     get:
       operationId: v1_staff_patients_list
-      description: All patients (search by phone, name or e-mail), newest first.
+      description: All patients of all accounts (search by patient name, or the account's
+        phone, name or e-mail).
       parameters:
       - in: header
         name: X-Api-Key
@@ -853,7 +1238,7 @@ paths:
         name: search
         schema:
           type: string
-        description: part of the phone number, name or e-mail
+        description: patient name, or the account's phone, name or e-mail
       tags:
       - v1
       security:
@@ -863,13 +1248,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPatientRowOutList'
+                $ref: '#/components/schemas/PaginatedStaffPatientRowOutList'
           description: ''
   /api/v1/staff/patients/{id}/:
     get:
       operationId: v1_staff_patients_retrieve
-      description: 'One patient''s complete history: profile, every consultation (hidden
-        ones too) and pulse analysis.'
+      description: 'One patient''s complete history: general info, every change to
+        it, every diagnosis and pulse analysis.'
       parameters:
       - in: header
         name: X-Api-Key
@@ -880,7 +1265,8 @@ paths:
       - in: path
         name: id
         schema:
-          type: integer
+          type: string
+          format: uuid
         required: true
       tags:
       - v1
@@ -938,6 +1324,44 @@ paths:
         description: App key (python manage.py create_api_client NAME)
 components:
   schemas:
+    AccountRowOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+        full_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+        patients:
+          type: integer
+        consultations:
+          type: integer
+        pulse_analyses:
+          type: integer
+        is_active:
+          type: boolean
+      required:
+      - consultations
+      - created_at
+      - email
+      - full_name
+      - id
+      - is_active
+      - last_login
+      - patients
+      - phone
+      - pulse_analyses
     ActorTypeEnum:
       enum:
       - patient
@@ -1089,6 +1513,30 @@ components:
       - passages
       - recipe
       - topic
+    ChronicConditionsEnum:
+      enum:
+      - diabetes
+      - hypertension
+      - heart
+      - kidney
+      - liver
+      - asthma
+      - thyroid
+      - epilepsy
+      - other
+      - none
+      type: string
+      description: |-
+        * `diabetes` - diabetes
+        * `hypertension` - hypertension
+        * `heart` - heart
+        * `kidney` - kidney
+        * `liver` - liver
+        * `asthma` - asthma
+        * `thyroid` - thyroid
+        * `epilepsy` - epilepsy
+        * `other` - other
+        * `none` - none
     CitationOut:
       type: object
       properties:
@@ -1114,9 +1562,25 @@ components:
         id:
           type: string
           format: uuid
-        patient:
+        account:
           type: integer
-          description: User id of the patient
+          description: User id of the account the patient belongs to
+        patient:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: The patient's general info AT THE TIME of this diagnosis (see
+            PatientSnapshotOut); null only for an emergency without patient
+        rediagnosis_of:
+          type: string
+          format: uuid
+          nullable: true
+          description: The earlier diagnosis this one re-ran
+        prefilled_answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Answers the server took from the patient's info
         status:
           $ref: '#/components/schemas/ConsultationStatusEnum'
         created_at:
@@ -1158,6 +1622,7 @@ components:
         deleted:
           type: boolean
       required:
+      - account
       - advice
       - assessment
       - book
@@ -1169,7 +1634,9 @@ components:
       - explanation_available
       - id
       - patient
+      - prefilled_answers
       - pulse_analyses
+      - rediagnosis_of
       - status
       - text
     ConsultationRequestRequest:
@@ -1180,7 +1647,19 @@ components:
           additionalProperties: {}
           description: '{question_id: answer}. Single choice: option key; multiple
             choice: list of keys; text: string. Example: {"red_flags": ["none"], "complaint":
-            "پرانی قبض", "duration": "chronic", ...}'
+            "پرانی قبض", "duration": "chronic", ...}. The questions in the patient''s
+            prefilled_questions may be left out: the server fills them.'
+        patient_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: An existing patient of this account (re-diagnosis)
+        new_patient:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          description: A new patient's general info (GET /patients/intake-form/),
+            created together with this diagnosis
       required:
       - answers
     ConsultationStatusEnum:
@@ -1202,6 +1681,14 @@ components:
         created_at:
           type: string
           format: date-time
+        patient:
+          allOf:
+          - $ref: '#/components/schemas/PatientRefOut'
+          nullable: true
+        rediagnosis_of:
+          type: string
+          format: uuid
+          nullable: true
         primary_system:
           type: string
           nullable: true
@@ -1219,7 +1706,9 @@ components:
       - deleted
       - explanation_status
       - id
+      - patient
       - primary_system
+      - rediagnosis_of
       - status
     EmergencyOut:
       type: object
@@ -1414,16 +1903,71 @@ components:
       - explanation_enabled
       - google_login_enabled
       - status
-    KindEnum:
+    IntakeFieldOut:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/IntakeFieldOutKindEnum'
+        required:
+          type: boolean
+        label:
+          type: string
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: string
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+        max_length:
+          type: integer
+        help:
+          type: string
+      required:
+      - id
+      - kind
+      - label
+      - required
+    IntakeFieldOutKindEnum:
       enum:
+      - text
       - single
       - multi
-      - text
+      - integer
+      - number
+      - boolean
       type: string
       description: |-
+        * `text` - text
         * `single` - single
         * `multi` - multi
-        * `text` - text
+        * `integer` - integer
+        * `number` - number
+        * `boolean` - boolean
+    IntakeFormOut:
+      type: object
+      properties:
+        version:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntakeFieldOut'
+        prefills:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - fields
+      - prefills
+      - version
     LoginInRequest:
       type: object
       properties:
@@ -1457,6 +2001,29 @@ components:
       required:
       - key
       - label
+    PaginatedAccountRowOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountRowOut'
     PaginatedAuditEventOutList:
       type: object
       required:
@@ -1503,7 +2070,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ConsultationSummaryOut'
-    PaginatedPatientRowOutList:
+    PaginatedPatientOutList:
       type: object
       required:
       - count
@@ -1525,7 +2092,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/PatientRowOut'
+            $ref: '#/components/schemas/PatientOut'
     PaginatedPulseAnalysisOutList:
       type: object
       required:
@@ -1549,6 +2116,52 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PulseAnalysisOut'
+    PaginatedRevisionOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RevisionOut'
+    PaginatedStaffPatientRowOutList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffPatientRowOut'
     PassageOut:
       type: object
       properties:
@@ -1578,6 +2191,54 @@ components:
           maxLength: 128
       required:
       - new_password
+    PatchedPatientInRequest:
+      type: object
+      description: 'General info of a patient (create: full_name, relation, gender,
+        birth_year and consent are required).'
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        relation:
+          $ref: '#/components/schemas/RelationEnum'
+        gender:
+          $ref: '#/components/schemas/GenderEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+        weight_kg:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,1})?$
+          nullable: true
+        height_cm:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,1})?$
+          nullable: true
+        chronic_conditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChronicConditionsEnum'
+          maxItems: 10
+        conditions_other:
+          type: string
+          maxLength: 300
+        allergies:
+          type: string
+          maxLength: 300
+        medications:
+          type: string
+          maxLength: 500
+        notes:
+          type: string
+          maxLength: 2000
+        consent:
+          type: boolean
+          writeOnly: true
+          description: Required (true) when the patient is created
     PatchedProfileInRequest:
       type: object
       properties:
@@ -1598,41 +2259,224 @@ components:
           minLength: 1
           description: Only accepted while the account has no phone yet (Google accounts)
           maxLength: 30
-    PatientRowOut:
+    PatientInRequest:
+      type: object
+      description: 'General info of a patient (create: full_name, relation, gender,
+        birth_year and consent are required).'
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        relation:
+          $ref: '#/components/schemas/RelationEnum'
+        gender:
+          $ref: '#/components/schemas/GenderEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+        weight_kg:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,1})?$
+          nullable: true
+        height_cm:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,1})?$
+          nullable: true
+        chronic_conditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChronicConditionsEnum'
+          maxItems: 10
+        conditions_other:
+          type: string
+          maxLength: 300
+        allergies:
+          type: string
+          maxLength: 300
+        medications:
+          type: string
+          maxLength: 500
+        notes:
+          type: string
+          maxLength: 2000
+        consent:
+          type: boolean
+          writeOnly: true
+          description: Required (true) when the patient is created
+      required:
+      - birth_year
+      - full_name
+      - gender
+      - relation
+    PatientOut:
       type: object
       properties:
         id:
-          type: integer
-        phone:
           type: string
-          nullable: true
-        email:
-          type: string
+          format: uuid
         full_name:
           type: string
+        relation:
+          $ref: '#/components/schemas/RelationEnum'
+        gender:
+          type: string
+        birth_year:
+          type: integer
+          nullable: true
+        age:
+          type: integer
+          nullable: true
+        age_group:
+          type: string
+          nullable: true
+          description: child | adult | elderly (from birth_year)
+        weight_kg:
+          type: number
+          format: double
+          nullable: true
+        height_cm:
+          type: number
+          format: double
+          nullable: true
+        bmi:
+          type: number
+          format: double
+          nullable: true
+        chronic_conditions:
+          type: array
+          items:
+            type: string
+        conditions_other:
+          type: string
+        allergies:
+          type: string
+        medications:
+          type: string
+        notes:
+          type: string
+        prefilled_questions:
+          type: array
+          items:
+            type: string
+          description: 'Questionnaire questions the server answers from this info:
+            skip them'
+        consultations:
+          type: integer
+          description: Number of diagnoses
+        pulse_analyses:
+          type: integer
+        last_consultation_at:
+          type: string
+          format: date-time
+          nullable: true
         created_at:
           type: string
           format: date-time
-        last_login:
+        updated_at:
           type: string
           format: date-time
-          nullable: true
-        consultations:
-          type: integer
-        pulse_analyses:
-          type: integer
-        is_active:
+        deleted:
           type: boolean
       required:
+      - age
+      - age_group
+      - allergies
+      - birth_year
+      - bmi
+      - chronic_conditions
+      - conditions_other
       - consultations
       - created_at
-      - email
+      - deleted
+      - full_name
+      - gender
+      - height_cm
+      - id
+      - last_consultation_at
+      - medications
+      - notes
+      - prefilled_questions
+      - pulse_analyses
+      - relation
+      - updated_at
+      - weight_kg
+    PatientRefOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        relation:
+          type: string
+      required:
       - full_name
       - id
-      - is_active
-      - last_login
-      - phone
-      - pulse_analyses
+      - relation
+    PatientSnapshotOut:
+      type: object
+      description: The patient's general info at the time of a consultation.
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        relation:
+          type: string
+        gender:
+          type: string
+        birth_year:
+          type: integer
+          nullable: true
+        age:
+          type: integer
+          nullable: true
+        age_group:
+          type: string
+          nullable: true
+        weight_kg:
+          type: number
+          format: double
+          nullable: true
+        height_cm:
+          type: number
+          format: double
+          nullable: true
+        bmi:
+          type: number
+          format: double
+          nullable: true
+        chronic_conditions:
+          type: array
+          items:
+            type: string
+        conditions_other:
+          type: string
+        allergies:
+          type: string
+        medications:
+          type: string
+      required:
+      - age
+      - age_group
+      - allergies
+      - birth_year
+      - bmi
+      - chronic_conditions
+      - conditions_other
+      - full_name
+      - gender
+      - height_cm
+      - id
+      - medications
+      - relation
+      - weight_kg
     ProfileOut:
       type: object
       properties:
@@ -1687,8 +2531,12 @@ components:
         id:
           type: string
           format: uuid
-        patient:
+        account:
           type: integer
+        patient:
+          type: string
+          format: uuid
+          nullable: true
         consultation:
           type: string
           format: uuid
@@ -1719,6 +2567,7 @@ components:
           type: string
           default: ''
       required:
+      - account
       - consultation
       - created_at
       - error
@@ -1774,11 +2623,16 @@ components:
           allOf:
           - $ref: '#/components/schemas/MethodEnum'
           default: finger
+        patient:
+          type: string
+          format: uuid
+          nullable: true
+          description: The patient (required unless consultation is given)
         consultation:
           type: string
           format: uuid
           nullable: true
-          description: Link to one of your consultations (optional)
+          description: Link to one of your consultations (its patient is used)
         symptoms:
           type: string
           description: 'Optional free-text symptoms: JSON list ["…", "…"] or comma
@@ -1792,7 +2646,7 @@ components:
         id:
           type: string
         kind:
-          $ref: '#/components/schemas/KindEnum'
+          $ref: '#/components/schemas/QuestionOutKindEnum'
         stage:
           $ref: '#/components/schemas/StageEnum'
         text:
@@ -1828,6 +2682,16 @@ components:
       - skip_if
       - stage
       - text
+    QuestionOutKindEnum:
+      enum:
+      - single
+      - multi
+      - text
+      type: string
+      description: |-
+        * `single` - single
+        * `multi` - multi
+        * `text` - text
     QuestionnaireOut:
       type: object
       properties:
@@ -1873,12 +2737,27 @@ components:
       enum:
       - shown
       - withheld_vulnerable
+      - withheld_condition
       - withheld_hazard
       type: string
       description: |-
         * `shown` - shown
         * `withheld_vulnerable` - withheld_vulnerable
+        * `withheld_condition` - withheld_condition
         * `withheld_hazard` - withheld_hazard
+    RediagnoseRequestRequest:
+      type: object
+      properties:
+        answers:
+          type: object
+          additionalProperties: {}
+          description: 'Only the answers that changed since the earlier diagnosis
+            (e.g. {"urine_color": "yellow"}); all others are reused'
+        patient_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Needed only when the earlier diagnosis has no patient
     RefreshInRequest:
       type: object
       properties:
@@ -1919,6 +2798,50 @@ components:
       - consent
       - password
       - phone
+    RelationEnum:
+      enum:
+      - self
+      - spouse
+      - child
+      - parent
+      - sibling
+      - relative
+      - other
+      type: string
+      description: |-
+        * `self` - self
+        * `spouse` - spouse
+        * `child` - child
+        * `parent` - parent
+        * `sibling` - sibling
+        * `relative` - relative
+        * `other` - other
+    RevisionOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        changed_at:
+          type: string
+          format: date-time
+        changed_by:
+          type: integer
+          nullable: true
+        action:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        data:
+          $ref: '#/components/schemas/PatientSnapshotOut'
+      required:
+      - action
+      - changed_at
+      - changed_by
+      - data
+      - fields
+      - id
     RoleEnum:
       enum:
       - patient
@@ -1949,6 +2872,48 @@ components:
       required:
       - citation
       - context
+    StaffPatientRowOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        relation:
+          type: string
+        gender:
+          type: string
+        age:
+          type: integer
+          nullable: true
+        account:
+          type: integer
+        account_phone:
+          type: string
+          nullable: true
+        consultations:
+          type: integer
+        pulse_analyses:
+          type: integer
+        last_consultation_at:
+          type: string
+          format: date-time
+          nullable: true
+        deleted:
+          type: boolean
+      required:
+      - account
+      - account_phone
+      - age
+      - consultations
+      - deleted
+      - full_name
+      - gender
+      - id
+      - last_consultation_at
+      - pulse_analyses
+      - relation
     StageEnum:
       enum:
       - triage

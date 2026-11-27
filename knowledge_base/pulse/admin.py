@@ -5,9 +5,9 @@ from .models import PulseAnalysis
 
 @admin.register(PulseAnalysis)
 class PulseAnalysisAdmin(admin.ModelAdmin):
-    list_display = ("id", "patient", "method", "status", "created_at", "deleted_at")
+    list_display = ("id", "account", "patient", "method", "status", "created_at", "deleted_at")
     list_filter = ("status", "method")
-    search_fields = ("patient__username", "id")
+    search_fields = ("account__username", "patient__full_name", "id")
     readonly_fields = [f.name for f in PulseAnalysis._meta.fields]
 
     def has_add_permission(self, request):

@@ -80,6 +80,17 @@ VULNERABLE_NO_RECIPE = (
     "بچوں، حاملہ یا دودھ پلانے والی خواتین اور بزرگوں کے لیے یہاں کوئی نسخہ تجویز نہیں کیا جاتا۔ "
     "براہ کرم براہ راست کسی مستند حکیم یا ڈاکٹر سے رجوع کریں۔"
 )
+# Patient health conditions (from the patient's general info) for which no book recipe is shown: herbal recipes can
+# harm a weak kidney, liver or heart, or interact with the medicines these patients take. For a Hakeem to review.
+RECIPE_RISK_CONDITIONS = frozenset({"kidney", "liver", "heart"})
+CONDITION_NO_RECIPE = (
+    "مریض کو پہلے سے گردے، جگر یا دل کی بیماری ہے، اس لیے یہاں کوئی نسخہ تجویز نہیں کیا جاتا۔ "
+    "براہ کرم اپنے معالج یا کسی مستند حکیم سے براہ راست رجوع کریں۔"
+)
+MEDICATION_ADVICE = (
+    "مریض پہلے سے دوائیں لے رہا ہے، یا اسے کسی چیز سے الرجی ہے: کوئی بھی دیسی نسخہ شروع کرنے سے پہلے "
+    "اپنے معالج سے ضرور مشورہ کریں، کیونکہ دوائیں آپس میں اثر کر سکتی ہیں۔"
+)
 HAZARD_NAMES_UR = {
     "arsenic": "سنکھیا/سم الفار", "mercury": "پارہ/شنگرف", "copper_sulphate": "نیلا طوطیہ", "lead": "سرب",
     "aconite": "بچھناگ", "strychnine": "کچلہ", "datura": "دھتورا", "opium": "افیون", "cannabis": "بھنگ",
