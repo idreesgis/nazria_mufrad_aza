@@ -10,6 +10,10 @@ Multani, جلد اول + جلد دوم, 1,879 pages) into:
 and loads it all into **PostgreSQL** (schema `nazria`) for a self-hosted conversational model
 (RAG retrieval + fine-tuning).
 
+The **REST API** (Django) serves the knowledge base to the Android app. The app collects the patient's answers, and
+the server returns the assessment. See the [REST API](#rest-api-for-the-android-app) section below and
+[`docs/API.md`](docs/API.md).
+
 ## Pipeline
 
 ```
@@ -144,7 +148,55 @@ tokens, cost if `NAZRIA_PRICE_*` is set).
 
 Details: **[docs/AI_PROVIDER_ARCHITECTURE.md](docs/AI_PROVIDER_ARCHITECTURE.md)**.
 
-## Using it from the app
+## REST API for the Android app
+
+Django 5.2 LTS, Django REST Framework, and an OpenAPI spec in [`docs/openapi.yaml`](docs/openapi.yaml). The API
+calls the same `nazria_kb` code as the CLI, so the result is identical. The endpoints, the app flow and the error
+codes are described in [`docs/API.md`](docs/API.md).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/questionnaire/` | The questions to show, as edited by a Hakeem in the database. |
+| `POST /api/v1/triage/` | Emergency check for the red-flag answers and the complaint. |
+| `POST /api/v1/consultations/` | All the answers in; the assessment, book chapter and safe recipe or withheld reason out. |
+| `GET` / `DELETE /api/v1/consultations/{id}/` | Read the stored result again, or delete it. |
+| `POST /api/v1/consultations/{id}/explanation/` | AI explanation from book passages only. Off until `NAZRIA_ENGINE=hybrid`. |
+| `GET /api/v1/health/` | Liveness and database check. |
+
+**Setup**, using the same database and `.env` as the knowledge base:
+
+```bash
+pip install -r requirements.txt
+# in .env: DJANGO_SECRET_KEY, DJANGO_ALLOWED_HOSTS (and NAZRIA_DATABASE_URL, already there)
+python manage.py create_api_schema       # creates the schema "nazria_api" for Django's own tables (never "public")
+python manage.py migrate                 # API clients, admin users: all inside nazria_api
+python manage.py create_api_client android-app    # prints the app's API key once
+python manage.py createsuperuser         # optional: /admin/ for staff (API keys, consultation log)
+python manage.py runserver 0.0.0.0:8000  # development (Windows/PyCharm too)
+```
+
+To reach a server on your PC from the Android emulator, use `http://10.0.2.2:8000/api/v1/`; that host is allowed
+by default when `DJANGO_DEBUG=true`.
+
+**Production (Linux):**
+
+```bash
+gunicorn nazria_api.wsgi --workers 3 --timeout 120
+```
+
+- Keep the long timeout: AI explanations can take up to a minute.
+- Put the API behind HTTPS (for example nginx) and set `DJANGO_BEHIND_HTTPS_PROXY=true`.
+- Set `NAZRIA_API_CACHE=db` and run `python manage.py createcachetable`, so rate limits are shared by all workers.
+- Run `python manage.py collectstatic` for the admin pages.
+
+**Tests:** `pytest` runs the API tests with SQLite and an in-memory knowledge base, so no PostgreSQL is needed.
+With `NAZRIA_TEST_DATABASE_URL` set to a disposable database, `tests/api/test_postgres_backend.py` also checks the
+PostgreSQL path.
+
+**Batch jobs stay in the CLI** (`python -m nazria_kb build|load|verify|review|evaluate|export-training`). They are
+operator tools, not request-serving endpoints.
+
+## Using the data directly
 
 - **RAG**: query `nazria.knowledge_chunks` (`tsv` GIN index, `context_path`, `pages`, `tehreek_code`).
   For semantic search, add pgvector: `ALTER TABLE nazria.knowledge_chunks ADD COLUMN embedding vector(<dim>);`

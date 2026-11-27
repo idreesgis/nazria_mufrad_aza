@@ -1,0 +1,720 @@
+openapi: 3.0.3
+info:
+  title: Nazria Mufrad Aza API
+  version: 1.0.0
+  description: Symptom questionnaire, book-based assessment and optional AI explanation
+    for the Android app. Guidance only, not a diagnosis.
+paths:
+  /api/v1/consultations/:
+    post:
+      operationId: v1_consultations_create
+      description: Submit all answers; returns the assessment (or the emergency referral).
+        Stored for later reading.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsultationRequestRequest'
+        required: true
+      security:
+      - ApiKey: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsultationOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+  /api/v1/consultations/{id}/:
+    get:
+      operationId: v1_consultations_retrieve
+      description: Read a stored consultation again, or delete it (the patient's data
+        is removed from the server).
+      parameters:
+      - in: header
+        name: X-Consultation-Token
+        schema:
+          type: string
+        description: The access_token returned when the consultation was created
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - ApiKey: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsultationOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+    delete:
+      operationId: v1_consultations_destroy
+      description: Read a stored consultation again, or delete it (the patient's data
+        is removed from the server).
+      parameters:
+      - in: header
+        name: X-Consultation-Token
+        schema:
+          type: string
+        description: The access_token returned when the consultation was created
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - ApiKey: []
+      responses:
+        '204':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+  /api/v1/consultations/{id}/explanation/:
+    post:
+      operationId: v1_consultations_explanation_create
+      description: |-
+        AI explanation of a completed result in plain Urdu, using only book passages (may take 10–30 s).
+        Returns status "disabled" while the server runs with NAZRIA_ENGINE=questionnaire.
+      parameters:
+      - in: header
+        name: X-Consultation-Token
+        schema:
+          type: string
+        description: The access_token returned when the consultation was created
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - ApiKey: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplanationOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '429':
+          description: too many explanation requests
+  /api/v1/health/:
+    get:
+      operationId: v1_health_retrieve
+      description: Liveness and database check (no API key needed).
+      tags:
+      - v1
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthOut'
+          description: ''
+  /api/v1/questionnaire/:
+    get:
+      operationId: v1_questionnaire_retrieve
+      description: The questions and options the app shows, in order (as edited by
+        a Hakeem in the database).
+      tags:
+      - v1
+      security:
+      - ApiKey: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionnaireOut'
+          description: ''
+  /api/v1/triage/:
+    post:
+      operationId: v1_triage_create
+      description: Emergency check for the first answers. Call it after the red-flag
+        question (and after the complaint).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriageRequestRequest'
+        required: true
+      security:
+      - ApiKey: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriageOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+components:
+  schemas:
+    AssessmentOut:
+      type: object
+      properties:
+        conclusive:
+          type: boolean
+          description: 'False: no clear tehreek, the patient needs a pulse examination'
+        primary_system:
+          type: string
+          nullable: true
+          description: اعصابی | عضلاتی | غدی
+        primary_organs:
+          type: string
+          nullable: true
+        secondary_system:
+          type: string
+          nullable: true
+        tehreek:
+          type: string
+          nullable: true
+        mizaj:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          format: double
+        totals:
+          type: object
+          additionalProperties:
+            type: integer
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceOut'
+        vulnerable:
+          type: boolean
+          description: 'Child, elderly or pregnant: no recipe is ever returned'
+      required:
+      - conclusive
+      - confidence
+      - evidence
+      - mizaj
+      - primary_organs
+      - primary_system
+      - secondary_system
+      - tehreek
+      - totals
+      - vulnerable
+    BookOut:
+      type: object
+      properties:
+        topic:
+          allOf:
+          - $ref: '#/components/schemas/TopicOut'
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        recipe:
+          allOf:
+          - $ref: '#/components/schemas/RecipeOut'
+          nullable: true
+        diet:
+          type: string
+          nullable: true
+        passages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PassageOut'
+          description: Only when no chapter matched the complaint
+      required:
+      - description
+      - diet
+      - passages
+      - recipe
+      - topic
+    CitationOut:
+      type: object
+      properties:
+        volume:
+          type: integer
+        volume_name:
+          type: string
+        pages:
+          type: array
+          items:
+            type: integer
+        text:
+          type: string
+          description: Ready-made Urdu reference, e.g. "جلد دوم، صفحہ 127"
+      required:
+      - pages
+      - text
+      - volume
+      - volume_name
+    ConsultationOut:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        access_token:
+          type: string
+          description: Returned once, on creation. Send it as X-Consultation-Token
+            to read, explain or delete this consultation
+        status:
+          $ref: '#/components/schemas/ConsultationOutStatusEnum'
+        created_at:
+          type: string
+          format: date-time
+        emergency:
+          allOf:
+          - $ref: '#/components/schemas/EmergencyOut'
+          nullable: true
+        assessment:
+          allOf:
+          - $ref: '#/components/schemas/AssessmentOut'
+          nullable: true
+        book:
+          allOf:
+          - $ref: '#/components/schemas/BookOut'
+          nullable: true
+        advice:
+          type: array
+          items:
+            type: string
+        disclaimer:
+          type: string
+        text:
+          type: string
+          description: The whole result as Urdu text (same as the CLI), for simple
+            display
+        explanation:
+          allOf:
+          - $ref: '#/components/schemas/ExplanationOut'
+          nullable: true
+        explanation_available:
+          type: boolean
+          description: True when the server can explain this result with AI
+      required:
+      - advice
+      - assessment
+      - book
+      - created_at
+      - disclaimer
+      - emergency
+      - explanation
+      - explanation_available
+      - id
+      - status
+      - text
+    ConsultationOutStatusEnum:
+      enum:
+      - completed
+      - emergency
+      type: string
+      description: |-
+        * `completed` - completed
+        * `emergency` - emergency
+    ConsultationRequestRequest:
+      type: object
+      properties:
+        answers:
+          type: object
+          additionalProperties: {}
+          description: '{question_id: answer}. Single choice: option key; multiple
+            choice: list of keys; text: string. Example: {"red_flags": ["none"], "complaint":
+            "پرانی قبض", "duration": "chronic", ...}'
+      required:
+      - answers
+    EmergencyOut:
+      type: object
+      properties:
+        flags:
+          type: array
+          items:
+            type: string
+        flag_labels:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+      required:
+      - flag_labels
+      - flags
+      - message
+    ErrorOut:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - detail
+      - error
+    EvidenceOut:
+      type: object
+      properties:
+        question_id:
+          type: string
+        option_key:
+          type: string
+        question:
+          type: string
+        answer:
+          type: string
+        system:
+          type: string
+        citation:
+          $ref: '#/components/schemas/CitationOut'
+      required:
+      - answer
+      - citation
+      - option_key
+      - question
+      - question_id
+      - system
+    ExplanationOut:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ExplanationOutStatusEnum'
+        text:
+          type: string
+          description: Only when status is shown
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceOut'
+        reason:
+          type: string
+        retryable:
+          type: boolean
+        provider:
+          type: string
+        model:
+          type: string
+        external_provider:
+          type: boolean
+        notice:
+          type: string
+          nullable: true
+          description: Show to the patient when an external AI service was used
+      required:
+      - status
+    ExplanationOutStatusEnum:
+      enum:
+      - shown
+      - not_covered
+      - rejected
+      - unavailable
+      - disabled
+      type: string
+      description: |-
+        * `shown` - shown
+        * `not_covered` - not_covered
+        * `rejected` - rejected
+        * `unavailable` - unavailable
+        * `disabled` - disabled
+    HazardOut:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+      required:
+      - code
+      - name
+    HealthOut:
+      type: object
+      properties:
+        status:
+          type: string
+        database:
+          type: string
+        explanation_enabled:
+          type: boolean
+        api_version:
+          type: integer
+      required:
+      - api_version
+      - database
+      - explanation_enabled
+      - status
+    KindEnum:
+      enum:
+      - single
+      - multi
+      - text
+      type: string
+      description: |-
+        * `single` - single
+        * `multi` - multi
+        * `text` - text
+    OptionOut:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+      required:
+      - key
+      - label
+    PassageOut:
+      type: object
+      properties:
+        context:
+          type: string
+        excerpt:
+          type: string
+        citation:
+          $ref: '#/components/schemas/CitationOut'
+      required:
+      - citation
+      - context
+      - excerpt
+    QuestionOut:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          $ref: '#/components/schemas/KindEnum'
+        stage:
+          $ref: '#/components/schemas/StageEnum'
+        text:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionOut'
+        skip_if:
+          allOf:
+          - $ref: '#/components/schemas/SkipIfOut'
+          nullable: true
+          description: Do not ask this question when the given answer was chosen
+        emergency_unless:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: 'Any other selected option is an emergency: call /triage/'
+        min_length:
+          type: integer
+          nullable: true
+        max_length:
+          type: integer
+          nullable: true
+      required:
+      - emergency_unless
+      - id
+      - kind
+      - max_length
+      - min_length
+      - options
+      - skip_if
+      - stage
+      - text
+    QuestionnaireOut:
+      type: object
+      properties:
+        version:
+          type: string
+          description: Changes whenever a Hakeem edits the questions; cache by it
+        disclaimer:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionOut'
+      required:
+      - disclaimer
+      - questions
+      - version
+    RecipeOut:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/RecipeOutStatusEnum'
+        text:
+          type: string
+          nullable: true
+        dosage:
+          type: string
+          nullable: true
+        hazards:
+          type: array
+          items:
+            $ref: '#/components/schemas/HazardOut'
+        message:
+          type: string
+          nullable: true
+          description: Why the recipe is not shown
+      required:
+      - dosage
+      - hazards
+      - message
+      - status
+      - text
+    RecipeOutStatusEnum:
+      enum:
+      - shown
+      - withheld_vulnerable
+      - withheld_hazard
+      type: string
+      description: |-
+        * `shown` - shown
+        * `withheld_vulnerable` - withheld_vulnerable
+        * `withheld_hazard` - withheld_hazard
+    SkipIfOut:
+      type: object
+      properties:
+        question_id:
+          type: string
+        equals:
+          type: string
+      required:
+      - equals
+      - question_id
+    SourceOut:
+      type: object
+      properties:
+        context:
+          type: string
+        citation:
+          $ref: '#/components/schemas/CitationOut'
+      required:
+      - citation
+      - context
+    StageEnum:
+      enum:
+      - triage
+      - profile
+      - signs
+      type: string
+      description: |-
+        * `triage` - triage
+        * `profile` - profile
+        * `signs` - signs
+    TopicOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        citation:
+          $ref: '#/components/schemas/CitationOut'
+      required:
+      - citation
+      - id
+      - title
+    TriageOut:
+      type: object
+      properties:
+        emergency:
+          type: boolean
+        flags:
+          type: array
+          items:
+            type: string
+        flag_labels:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+          nullable: true
+          description: Show this and stop when emergency is true
+      required:
+      - emergency
+      - flag_labels
+      - flags
+      - message
+    TriageRequestRequest:
+      type: object
+      properties:
+        red_flags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 40
+          description: Option keys of the "red_flags" question, e.g. ["none"]
+          maxItems: 20
+        complaint:
+          type: string
+          description: Free-text complaint, if already entered (also screened)
+          maxLength: 1000
+      required:
+      - red_flags
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'Value: "Api-Key nzr_…" (create keys with: python manage.py create_api_client
+        NAME)'

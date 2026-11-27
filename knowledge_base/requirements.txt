@@ -4,3 +4,9 @@ pytest>=7
 openai>=3.51
 anthropic>=2.8
 google-genai>=3.3
+# REST API for the Android app (python manage.py runserver; production: gunicorn nazria_api.wsgi)
+Django>=5.2,<5.3
+djangorestframework>=3.16,<3.17
+drf-spectacular>=0.28,<0.29
+pytest-django>=4.9
+gunicorn>=23; sys_platform != "win32"
