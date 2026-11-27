@@ -19,7 +19,10 @@ from nazria_kb.llm_engine import (EXPLAIN_ASK, EXTERNAL_NOTICE, RagResponder, ex
 from nazria_kb.providers import ProviderError, build_provider
 from nazria_kb.questionnaire import SYSTEM_ORGANS, TEHREEK_MIZAJ, Question
 from nazria_kb.safety import (CONDITION_NO_RECIPE, DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS,
-                              VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message, strip_references)
+                              TEXT_FLAG_LABELS, VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message,
+                              strip_references)
+from nazria_kb.i18n import (DIRECTION, LANGUAGES, complaint_urdu_terms, msg, option_label, question_text, sep, system_code,
+                            system_name, tehreek_code, tehreek_name, tr)
 
 from .backends import KnowledgeBase
 
@@ -27,7 +30,11 @@ log = logging.getLogger("consultations")
 
 API_VERSION = 1
 COMPLAINT_MIN, COMPLAINT_MAX = 2, 1000
-RED_FLAG_LABELS = dict(RED_FLAGS)
+RED_FLAG_LABELS = {**dict(RED_FLAGS), **TEXT_FLAG_LABELS}
+
+
+def flag_labels(flags: list[str], lang: str) -> list[str]:
+    return [tr(RED_FLAG_LABELS.get(f, f), lang) for f in flags]
 
 
 class ValidationFailed(Exception):
@@ -42,16 +49,17 @@ def skip_rule(q: Question) -> dict | None:
     return {"question_id": "age_group", "equals": "child"} if q.id == "pregnancy" else None
 
 
-def questionnaire_payload(questions: list[Question]) -> dict:
-    """The question bank as the app renders it. Weights and source pages stay on the server."""
-    qs = [{"id": q.id, "kind": q.kind, "stage": q.stage, "text": q.text,
-           "options": [{"key": o.key, "label": o.label} for o in q.options],
+def questionnaire_payload(questions: list[Question], lang: str = "ur") -> dict:
+    """The question bank as the app renders it, in ur | en | ar. Weights and source pages stay on the server."""
+    qs = [{"id": q.id, "kind": q.kind, "stage": q.stage, "text": question_text(q.id, q.text, lang),
+           "options": [{"key": o.key, "label": option_label(q.id, o.key, o.label, lang)} for o in q.options],
            "skip_if": skip_rule(q),
            "emergency_unless": ["none"] if q.id == "red_flags" else None,
            "min_length": COMPLAINT_MIN if q.kind == "text" else None,
            "max_length": COMPLAINT_MAX if q.kind == "text" else None} for q in questions]
     version = hashlib.sha256(json.dumps(qs, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
-    return {"version": version, "disclaimer": DISCLAIMER, "questions": qs}
+    return {"version": version, "language": lang, "direction": DIRECTION[lang], "disclaimer": tr(DISCLAIMER, lang),
+            "questions": qs}
 
 
 # --------------------------------------------------------------------------- validation
@@ -112,14 +120,14 @@ def validate_answers(questions: list[Question], raw: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- triage
-def triage(red_flags: list[str], complaint: str | None) -> dict:
-    """Quick check the app calls right after the first screen(s): stop and refer if anything is an emergency."""
+def triage(red_flags: list[str], complaint: str | None, lang: str = "ur") -> dict:
+    """Quick check the app calls right after the first screen(s): stop and refer if anything is an emergency.
+    The complaint is screened in Urdu, English and Arabic."""
     flags = [f for f in red_flags if f != "none"]
     if complaint:
         flags += [f for f in detect_red_flags(complaint) if f not in flags]
-    return {"emergency": bool(flags), "flags": flags,
-            "flag_labels": [RED_FLAG_LABELS.get(f, f) for f in flags],
-            "message": emergency_message(flags) if flags else None}
+    return {"emergency": bool(flags), "flags": flags, "flag_labels": flag_labels(flags, lang),
+            "message": emergency_message(flags, lang) if flags else None, "language": lang}
 
 
 # --------------------------------------------------------------------------- consultation
@@ -142,7 +150,7 @@ def run_consultation(kb: KnowledgeBase, questions: list[Question], answers: dict
                      health: dict | None = None) -> Outcome:
     """Replay validated answers through the questionnaire engine; returns the stored session and the API payload.
     ``health``: from the patient's general info, {"conditions": [keys], "caution": bool} (safety filters)."""
-    engine = QuestionnaireEngine(kb.retriever(), questions)
+    engine = QuestionnaireEngine(GlossaryRetriever(kb.retriever()), questions)
     by_id = {q.id: q for q in questions}
     s = Session(engine="questionnaire")
     reply = engine.start(s)
@@ -161,52 +169,83 @@ def run_consultation(kb: KnowledgeBase, questions: list[Question], answers: dict
             raise RuntimeError(f"engine rejected the answer to {qid}")
     if not reply.done:
         raise RuntimeError("questionnaire did not finish")
-    payload = build_payload(s, s.meta.get("assessment"))
-    s.result["api"] = payload                         # what GET /consultations/{id}/ returns later
-    return Outcome(s, payload, s.meta.get("assessment"))
+    a = s.meta.get("assessment")
+    payloads = {lang: build_payload(s, a, lang) for lang in LANGUAGES}
+    s.result["api"] = payloads["ur"]                  # older readers
+    s.result["api_i18n"] = payloads                   # what GET /consultations/{id}/ returns, per language
+    return Outcome(s, payloads["ur"], a)
 
 
-def build_payload(s: Session, a: Assessment | None) -> dict:
+class GlossaryRetriever:
+    """The book is Urdu: an English or Arabic complaint also searches the Urdu words of its complaint glossary."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def topics_for(self, complaint: str, system: str | None, limit: int = 3):
+        extra = complaint_urdu_terms(complaint)
+        return self.inner.topics_for(f"{complaint} {extra}".strip() if extra else complaint, system, limit)
+
+    def passages(self, query: str, limit: int = 3):
+        extra = complaint_urdu_terms(query)
+        return self.inner.passages(f"{query} {extra}".strip() if extra else query, limit)
+
+
+def payload_for(result: dict, lang: str) -> dict:
+    """The stored payload in the requested language (results saved before i18n exist in Urdu only)."""
+    by_lang = result.get("api_i18n") or {}
+    return dict(by_lang.get(lang) or by_lang.get("ur") or result.get("api") or {})
+
+
+def build_payload(s: Session, a: Assessment | None, lang: str = "ur") -> dict:
+    from nazria_kb.diet import localize_plan
+    from nazria_kb.engine import CHRONIC_ADVICE, render_assessment
+    from nazria_kb.safety import MEDICATION_ADVICE
     created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    base = {"language": lang, "direction": DIRECTION[lang], "created_at": created, "disclaimer": tr(DISCLAIMER, lang)}
     if s.status == "emergency":
         flags = s.result.get("red_flags", [])
-        return {"status": "emergency", "created_at": created,
-                "emergency": {"flags": flags, "flag_labels": [RED_FLAG_LABELS.get(f, f) for f in flags],
-                              "message": emergency_message(flags)},
-                "assessment": None, "book": None, "diet_plans": [], "advice": [], "disclaimer": DISCLAIMER,
-                "text": s.transcript[-1]["content"]}
+        message = emergency_message(flags, lang)
+        return {**base, "status": "emergency",
+                "emergency": {"flags": flags, "flag_labels": flag_labels(flags, lang), "message": message},
+                "assessment": None, "book": None, "diet_plans": [], "advice": [],
+                "text": s.transcript[-1]["content"] if lang == "ur" else message}
     sc = a.score
-    evidence = [{"question_id": qid, "option_key": key, "question": qtext, "answer": label, "system": system}
+    evidence = [{"question_id": qid, "option_key": key, "question": question_text(qid, qtext, lang),
+                 "answer": option_label(qid, key, label, lang), "system": system_name(system, lang),
+                 "system_code": system_code(system)}
                 for (qtext, label, system, _pages), (qid, key) in zip(sc.evidence, sc.evidence_keys)]
     assessment = {
-        "conclusive": sc.conclusive, "primary_system": sc.primary,
-        "primary_organs": SYSTEM_ORGANS.get(sc.primary) if sc.primary else None,
-        "secondary_system": sc.secondary, "tehreek": sc.tehreek,
-        "mizaj": TEHREEK_MIZAJ.get(sc.tehreek) if sc.tehreek else None,
-        "confidence": sc.confidence, "totals": sc.totals, "evidence": evidence, "vulnerable": a.vulnerable,
+        "conclusive": sc.conclusive,
+        "primary_system": system_name(sc.primary, lang), "primary_system_code": system_code(sc.primary),
+        "primary_organs": tr(SYSTEM_ORGANS.get(sc.primary), lang) if sc.primary else None,
+        "secondary_system": system_name(sc.secondary, lang), "secondary_system_code": system_code(sc.secondary),
+        "tehreek": tehreek_name(sc.tehreek, lang), "tehreek_code": tehreek_code(sc.tehreek),
+        "mizaj": tr(TEHREEK_MIZAJ.get(sc.tehreek), lang) if sc.tehreek else None,
+        "confidence": sc.confidence, "totals": {system_code(k): v for k, v in sc.totals.items()},
+        "evidence": evidence, "vulnerable": a.vulnerable,
     }
     book = None
     if a.topic:
         recipe = None
         if a.recipe_status:
-            hazards = [{"code": h, "name": HAZARD_NAMES_UR.get(h, h)} for h in a.hazards]
-            message = (VULNERABLE_NO_RECIPE if a.recipe_status == "withheld_vulnerable" else
-                       CONDITION_NO_RECIPE if a.recipe_status == "withheld_condition" else
-                       PRACTITIONER_ONLY.format(items="، ".join(HAZARD_NAMES_UR[x] for x in a.hazards))
+            hazards = [{"code": h, "name": tr(HAZARD_NAMES_UR.get(h, h), lang)} for h in a.hazards]
+            message = (tr(VULNERABLE_NO_RECIPE, lang) if a.recipe_status == "withheld_vulnerable" else
+                       tr(CONDITION_NO_RECIPE, lang) if a.recipe_status == "withheld_condition" else
+                       tr(PRACTITIONER_ONLY, lang).format(
+                           items=sep(lang).join(tr(HAZARD_NAMES_UR[x], lang) for x in a.hazards))
                        if a.recipe_status == "withheld_hazard" else None)
             recipe = {"status": a.recipe_status, "text": a.recipe, "dosage": a.dosage, "hazards": hazards,
                       "message": message}
-        book = {"topic": {"id": a.topic.topic_id, "title": a.topic.title},
+        book = {"language": "ur", "topic": {"id": a.topic.topic_id, "title": a.topic.title},
                 "description": a.description, "recipe": recipe, "diet": a.diet, "passages": []}
     elif a.passages:
-        book = {"topic": None, "description": None, "recipe": None, "diet": None,
+        book = {"language": "ur", "topic": None, "description": None, "recipe": None, "diet": None,
                 "passages": [{"title": passage_title(p.context), "excerpt": ex} for p, ex in a.passages]}
-    from nazria_kb.engine import CHRONIC_ADVICE
-    from nazria_kb.safety import MEDICATION_ADVICE
-    advice = ([CHRONIC_ADVICE] if a.chronic else []) + ([MEDICATION_ADVICE] if a.caution else [])
-    return {"status": "completed", "created_at": created, "emergency": None, "assessment": assessment, "book": book,
-            "diet_plans": a.diet_plans, "advice": advice, "disclaimer": DISCLAIMER,
-            "text": s.transcript[-1]["content"]}
+    advice = ([tr(CHRONIC_ADVICE, lang)] if a.chronic else []) + ([tr(MEDICATION_ADVICE, lang)] if a.caution else [])
+    return {**base, "status": "completed", "emergency": None, "assessment": assessment, "book": book,
+            "diet_plans": [localize_plan(p, lang) for p in a.diet_plans], "advice": advice,
+            "text": s.transcript[-1]["content"] if lang == "ur" else render_assessment(a, lang)}
 
 
 # --------------------------------------------------------------------------- AI explanation
@@ -241,12 +280,19 @@ def _provider(cfg: EngineConfig):
         return _provider_cache[key]
 
 
-def explain(kb: KnowledgeBase, s: Session) -> dict:
-    """Ask the configured AI provider to explain a stored result in Urdu, from book passages only.
+def stored_explanation(result: dict, lang: str) -> dict | None:
+    by_lang = result.get("explanations") or {}
+    if lang in by_lang:
+        return by_lang[lang]
+    return result.get("explanation") if lang == "ur" else None        # saved before i18n: Urdu
+
+
+def explain(kb: KnowledgeBase, s: Session, lang: str = "ur") -> dict:
+    """Ask the configured AI provider to explain a stored result in ur | en | ar, from book passages only.
 
     status: shown | not_covered | rejected | unavailable | disabled. Only ``shown`` has text. A shown explanation
-    is stored and returned again on later calls without a new AI request."""
-    stored = s.result.get("explanation")
+    is stored (per language) and returned again on later calls without a new AI request."""
+    stored = stored_explanation(s.result, lang)
     if stored and stored.get("status") == "shown":
         return stored
     cfg = explanation_config()
@@ -262,19 +308,20 @@ def explain(kb: KnowledgeBase, s: Session) -> dict:
     s.meta = {}
     try:
         ans = responder.answer(s, EXPLAIN_ASK, vulnerable=is_vulnerable(s), context_note=explanation_context(s),
-                               query=explanation_query(s) or EXPLAIN_ASK)
+                               query=explanation_query(s) or EXPLAIN_ASK, language=lang)
     except ProviderError as e:
         log.warning("explanation failed: %s", e.kind)
         return {"status": "unavailable", "reason": e.kind, "retryable": bool(e.retryable)}
     base = {"provider": ans.meta.get("provider") or provider.name, "model": ans.meta.get("model") or provider.model,
             "external_provider": bool(provider.external),
-            "notice": EXTERNAL_NOTICE.format(provider=provider.name) if provider.external else None}
+            "notice": tr(EXTERNAL_NOTICE, lang).format(provider=provider.name) if provider.external else None,
+            "language": lang}
     if ans.kind == "llm":
         # the citations proved the text is grounded; the patient sees it without book, author or page references
         result = {"status": "shown", "text": strip_references(ans.meta.get("body") or ans.text), **base}
         s.result["explanation_sources"] = [{"context": src["context"], "volume": src["volume"], "pages": src["pages"]}
                                            for src in ans.meta.get("sources", [])]        # kept for review only
-        s.transcript.append({"role": "hakeem", "content": "وضاحت:\n" + ans.text, "question_id": None,
+        s.transcript.append({"role": "hakeem", "content": msg("explanation", lang) + "\n" + ans.text, "question_id": None,
                              **{k: ans.meta[k] for k in ("prompt_tokens", "completion_tokens", "latency_ms",
                                                           "source_chunk_ids") if ans.meta.get(k) is not None}})
         s.engine, s.provider, s.model = "hybrid", base["provider"], base["model"]
@@ -285,6 +332,8 @@ def explain(kb: KnowledgeBase, s: Session) -> dict:
         reason = ans.meta.get("degenerate") and "unusable_output" or (
             "no_valid_citation" if ans.meta.get("citation_missing") else ans.kind)
         result = {"status": "rejected", "reason": reason, **base}
-    s.result["explanation"] = result
+    s.result.setdefault("explanations", {})[lang] = result
+    if lang == "ur":
+        s.result["explanation"] = result
     kb.save_session(s)
     return result

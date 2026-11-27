@@ -51,4 +51,10 @@ class PulseAnalysisOut(serializers.Serializer):
     symptoms = serializers.ListField(child=serializers.CharField())
     created_at = serializers.DateTimeField()
     processed_at = serializers.DateTimeField(allow_null=True)
+    error_en = serializers.CharField(allow_blank=True, required=False, help_text="The error in English (for logs)")
+    summary = serializers.DictField(allow_null=True, required=False,
+                                    help_text="Heart rate, rhythm, strength, volume, tension, rate_pattern in the "
+                                              "requested language")
+    language = serializers.CharField(required=False)
+    direction = serializers.CharField(required=False)
     disclaimer = serializers.CharField(default="")

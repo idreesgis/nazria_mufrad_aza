@@ -60,7 +60,9 @@ class QuestionOut(serializers.Serializer):
 
 
 class QuestionnaireOut(serializers.Serializer):
-    version = serializers.CharField(help_text="Changes whenever a Hakeem edits the questions; cache by it")
+    version = serializers.CharField(help_text="Changes whenever the questions change (per language); cache by it")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], help_text="Language of the texts in this response")
+    direction = serializers.ChoiceField(choices=["rtl", "ltr"], help_text="Text direction for that language")
     disclaimer = serializers.CharField()
     questions = QuestionOut(many=True)
 
@@ -70,6 +72,7 @@ class TriageOut(serializers.Serializer):
     flags = serializers.ListField(child=serializers.CharField())
     flag_labels = serializers.ListField(child=serializers.CharField())
     message = serializers.CharField(allow_null=True, help_text="Show this and stop when emergency is true")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"])
 
 
 class EmergencyOut(serializers.Serializer):
@@ -83,18 +86,23 @@ class EvidenceOut(serializers.Serializer):
     option_key = serializers.CharField()
     question = serializers.CharField()
     answer = serializers.CharField()
-    system = serializers.CharField(help_text="The system this symptom points to: اعصابی | عضلاتی | غدی")
+    system = serializers.CharField(help_text="The system this symptom points to, in the response language")
+    system_code = serializers.ChoiceField(choices=["nervous", "muscular", "glandular"])
 
 
 class AssessmentOut(serializers.Serializer):
     conclusive = serializers.BooleanField(help_text="False: no clear tehreek, the patient needs a pulse examination")
-    primary_system = serializers.CharField(allow_null=True, help_text="اعصابی | عضلاتی | غدی")
+    primary_system = serializers.CharField(allow_null=True, help_text="In the response language")
+    primary_system_code = serializers.ChoiceField(choices=["nervous", "muscular", "glandular"], allow_null=True)
     primary_organs = serializers.CharField(allow_null=True)
     secondary_system = serializers.CharField(allow_null=True)
-    tehreek = serializers.CharField(allow_null=True)
+    secondary_system_code = serializers.ChoiceField(choices=["nervous", "muscular", "glandular"], allow_null=True)
+    tehreek = serializers.CharField(allow_null=True, help_text="In the response language")
+    tehreek_code = serializers.CharField(allow_null=True, help_text='e.g. "muscular_glandular"')
     mizaj = serializers.CharField(allow_null=True)
     confidence = serializers.FloatField()
-    totals = serializers.DictField(child=serializers.IntegerField())
+    totals = serializers.DictField(child=serializers.IntegerField(), help_text='{"nervous": n, "muscular": n, '
+                                   '"glandular": n}')
     evidence = EvidenceOut(many=True)
     vulnerable = serializers.BooleanField(help_text="Child, elderly or pregnant: no recipe is ever returned")
 
@@ -123,6 +131,7 @@ class PassageOut(serializers.Serializer):
 
 
 class BookOut(serializers.Serializer):
+    language = serializers.CharField(help_text='Always "ur": book text is shown in the original Urdu')
     topic = TopicOut(allow_null=True)
     description = serializers.CharField(allow_null=True)
     recipe = RecipeOut(allow_null=True)
@@ -137,7 +146,8 @@ class QehwaOut(serializers.Serializer):
 
 
 class DietPlanOut(serializers.Serializer):
-    tehreek = serializers.CharField(help_text="The tehreek this plan is for")
+    tehreek = serializers.CharField(help_text="The tehreek this plan is for, in the response language")
+    tehreek_code = serializers.CharField()
     mizaj = serializers.CharField()
     choose_if = serializers.CharField(allow_null=True, help_text="Only when two plans are given (the tehreek is not "
                                       "certain): the feeling that tells the patient which plan applies")
@@ -161,6 +171,7 @@ class ExplanationOut(serializers.Serializer):
     external_provider = serializers.BooleanField(required=False)
     notice = serializers.CharField(required=False, allow_null=True,
                                    help_text="Show to the patient when an external AI service was used")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], required=False)
 
 
 class PulseSummaryOut(serializers.Serializer):
@@ -184,6 +195,7 @@ class ConsultationSummaryOut(serializers.Serializer):
     patient = PatientRefOut(allow_null=True)
     rediagnosis_of = serializers.UUIDField(allow_null=True)
     primary_system = serializers.CharField(allow_null=True)
+    primary_system_code = serializers.CharField(allow_null=True)
     explanation_status = serializers.CharField(allow_null=True)
     complaint = serializers.CharField()
     deleted = serializers.BooleanField(help_text="Hidden by the patient (only staff see these)")
@@ -191,6 +203,8 @@ class ConsultationSummaryOut(serializers.Serializer):
 
 class ConsultationOut(serializers.Serializer):
     id = serializers.UUIDField()
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], help_text="Language of the texts in this response")
+    direction = serializers.ChoiceField(choices=["rtl", "ltr"], help_text="Text direction for that language")
     account = serializers.IntegerField(help_text="User id of the account the patient belongs to")
     patient = serializers.DictField(allow_null=True, help_text="The patient's general info AT THE TIME of this "
                                     "diagnosis (see PatientSnapshotOut); null only for an emergency without patient")

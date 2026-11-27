@@ -14,6 +14,8 @@ from pulse.models import PulseAnalysis
 
 from .models import PatientProfile, role_of
 from .permissions import HasAppKey, IsStaff
+from nazria_api.language import request_language
+
 from .views import profile_of
 
 User = get_user_model()
@@ -85,7 +87,7 @@ class AccountHistoryView(APIView):
             "profile": {**profile_of(user), "is_active": user.is_active, "last_login": user.last_login,
                         "role": role_of(user)},
             "patients": [patient_out(p) for p in with_counts(user.patients.all())],
-            "consultations": summaries(list(Consultation.objects.filter(account=user))),
+            "consultations": summaries(list(Consultation.objects.filter(account=user)), request_language(request)),
             "pulse_analyses": _pulses(PulseAnalysis.objects.filter(account=user)),
         })
 
@@ -156,6 +158,6 @@ class StaffPatientHistoryView(APIView):
             "patient": patient_out(p),
             "account": {**profile_of(p.account), "is_active": p.account.is_active},
             "revisions": RevisionOut(p.revisions.all(), many=True).data,
-            "consultations": summaries(list(Consultation.objects.filter(patient=p))),
+            "consultations": summaries(list(Consultation.objects.filter(patient=p)), request_language(request)),
             "pulse_analyses": _pulses(PulseAnalysis.objects.filter(patient=p)),
         })

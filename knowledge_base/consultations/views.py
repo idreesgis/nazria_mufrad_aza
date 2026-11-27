@@ -25,6 +25,7 @@ from . import serializers as S
 from . import services
 from .backends import knowledge_base
 from .models import Consultation
+from nazria_api.language import request_language
 
 log = logging.getLogger("consultations")
 
@@ -86,7 +87,7 @@ class QuestionnaireView(APIView):
 
     @extend_schema(responses={200: S.QuestionnaireOut})
     def get(self, request):
-        return Response(services.questionnaire_payload(knowledge_base().questions()))
+        return Response(services.questionnaire_payload(knowledge_base().questions(), request_language(request)))
 
 
 class TriageView(APIView):
@@ -102,31 +103,35 @@ class TriageView(APIView):
         bad = [f for f in req.validated_data["red_flags"] if f not in known]
         if bad:
             return _error("invalid_request", "unknown red-flag option", 400, {"red_flags": f"unknown: {bad}"})
-        result = services.triage(req.validated_data["red_flags"], req.validated_data.get("complaint"))
+        result = services.triage(req.validated_data["red_flags"], req.validated_data.get("complaint"),
+                                 request_language(request))
         audit(request, "triage", "", None, emergency=result["emergency"], flags=result["flags"])
         return Response(result)
 
 
-def consultation_body(c: Consultation, session) -> dict:
-    payload = dict(session.result.get("api") or {})
+def consultation_body(c: Consultation, session, lang: str = "ur") -> dict:
+    payload = services.payload_for(session.result, lang)
     pulses = [{"id": str(p.id), "status": p.status, "method": p.method, "created_at": p.created_at,
                "average_heart_rate_bpm": (p.result or {}).get("average_heart_rate_bpm")}
               for p in c.pulse_analyses.all() if p.deleted_at is None]
     return {"id": str(c.session_uid), "account": c.account_id, "patient": c.patient_snapshot or None,
             "rediagnosis_of": str(c.rediagnosis_of_id) if c.rediagnosis_of_id else None,
             "prefilled_answers": session.result.get("prefilled_answers") or {}, **payload,
-            "explanation": session.result.get("explanation"),
+            "explanation": services.stored_explanation(session.result, lang),
             "explanation_available": payload.get("status") == "completed" and services.explanation_enabled(),
             "pulse_analyses": pulses, "deleted": c.deleted_at is not None}
 
 
-def summaries(consultations: list[Consultation]) -> list[dict]:
+def summaries(consultations: list[Consultation], lang: str = "ur") -> list[dict]:
+    from nazria_kb.i18n import system_code, system_name
     extra = knowledge_base().session_summaries([str(c.session_uid) for c in consultations])
     return [{"id": str(c.session_uid), "status": c.status, "created_at": c.created_at,
              "patient": ({"id": str(c.patient_id), "full_name": c.patient_snapshot.get("full_name", ""),
                           "relation": c.patient_snapshot.get("relation", "")} if c.patient_id else None),
              "rediagnosis_of": str(c.rediagnosis_of_id) if c.rediagnosis_of_id else None,
-             "primary_system": c.primary_system or None, "explanation_status": c.explanation_status or None,
+             "primary_system": system_name(c.primary_system, lang) or None,
+             "primary_system_code": system_code(c.primary_system) if c.primary_system else None,
+             "explanation_status": c.explanation_status or None,
              "complaint": extra.get(str(c.session_uid), {}).get("complaint", ""), "deleted": c.deleted_at is not None}
             for c in consultations]
 
@@ -203,7 +208,7 @@ class ConsultationListCreateView(generics.ListAPIView):
         page = self.paginate_queryset(self.get_queryset())
         audit(request, "consultation.list", "user", request.user.pk,
               patient=request.query_params.get("patient") or None)
-        return self.get_paginated_response(summaries(page))
+        return self.get_paginated_response(summaries(page, request_language(request)))
 
     @extend_schema(request=S.ConsultationRequest,
                    responses={201: S.ConsultationOut, 400: S.ErrorOut, 404: S.ErrorOut, 503: S.ErrorOut})
@@ -228,7 +233,7 @@ class ConsultationListCreateView(generics.ListAPIView):
         c, s, err = diagnose(request, d["answers"], patient, new_data)
         if err:
             return err
-        return Response(consultation_body(c, s), status=status.HTTP_201_CREATED)
+        return Response(consultation_body(c, s, request_language(request)), status=status.HTTP_201_CREATED)
 
 
 class _VisibleConsultation(APIView):
@@ -249,7 +254,7 @@ class ConsultationDetailView(_VisibleConsultation):
         if err:
             return err
         audit(request, "consultation.view", "consultation", pk)
-        return Response(consultation_body(c, s))
+        return Response(consultation_body(c, s, request_language(request)))
 
     @extend_schema(responses={204: None, 404: S.ErrorOut})
     def delete(self, request, pk):
@@ -287,7 +292,7 @@ class RediagnoseView(_VisibleConsultation):
         c, s, err = diagnose(request, {**previous, **d["answers"]}, patient, rediagnosis_of=old)
         if err:
             return err
-        return Response(consultation_body(c, s), status=status.HTTP_201_CREATED)
+        return Response(consultation_body(c, s, request_language(request)), status=status.HTTP_201_CREATED)
 
 
 class ExplanationView(_VisibleConsultation):
@@ -305,7 +310,7 @@ class ExplanationView(_VisibleConsultation):
             return err
         if s.status != "completed":
             return _error("not_explainable", "only completed consultations can be explained", 409)
-        result = services.explain(knowledge_base(), s)
+        result = services.explain(knowledge_base(), s, request_language(request))
         if c.explanation_status != result["status"]:
             Consultation.objects.filter(pk=c.pk).update(explanation_status=result["status"])
         audit(request, "consultation.explain", "consultation", pk, status=result["status"],

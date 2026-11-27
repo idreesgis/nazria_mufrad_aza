@@ -10,8 +10,9 @@ from .ppg_service import analyze_pulse_video
 
 log = logging.getLogger("pulse")
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".3gp", ".webm", ".mkv", ".m4v", ".avi"}
-DISCLAIMER = ("Pulse analysis from a phone camera is experimental and only supports a Hakeem's examination; "
-              "it is not a diagnosis. نبض کا یہ تجزیہ تجرباتی ہے، تشخیص نہیں۔")
+from .i18n import DISCLAIMER as DISCLAIMERS          # noqa: E402
+
+DISCLAIMER = DISCLAIMERS["en"]
 # messages of the analyser that are safe to show (they never contain a file path)
 _KNOWN = {
     "Insufficient frames extracted": "the video is too short or the finger was not detected",

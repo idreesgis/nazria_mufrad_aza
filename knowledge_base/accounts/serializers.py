@@ -23,6 +23,7 @@ class RegisterIn(serializers.Serializer):
     gender = serializers.ChoiceField(choices=["male", "female", "other"], required=False, allow_blank=True)
     birth_year = serializers.IntegerField(min_value=1900, max_value=2100, required=False, allow_null=True)
     consent = serializers.BooleanField(help_text="The patient accepted the disclaimer (guidance, not diagnosis)")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], required=False, help_text="Language of the app's texts: ur | en | ar")
 
     def validate_phone(self, value):
         phone = _phone(value)
@@ -69,6 +70,7 @@ class ProfileOut(serializers.Serializer):
     consent_at = serializers.DateTimeField(allow_null=True)
     created_at = serializers.DateTimeField()
     has_password = serializers.BooleanField(help_text="False for a Google-only account (phone login not possible)")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"])
     linked_providers = serializers.ListField(child=serializers.CharField(), help_text='e.g. ["google"]')
 
 
@@ -78,7 +80,7 @@ class ProfileIn(serializers.ModelSerializer):
 
     class Meta:
         model = PatientProfile
-        fields = ["full_name", "gender", "birth_year", "phone"]
+        fields = ["full_name", "gender", "birth_year", "phone", "language"]
         extra_kwargs = {"birth_year": {"min_value": 1900, "max_value": 2100}}
 
     def validate_phone(self, value):
@@ -100,6 +102,7 @@ class GoogleLoginIn(serializers.Serializer):
                                       help_text="New accounts: defaults to the Google name")
     gender = serializers.ChoiceField(choices=["male", "female", "other"], required=False, allow_blank=True)
     birth_year = serializers.IntegerField(min_value=1900, max_value=2100, required=False, allow_null=True)
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], required=False, help_text="Language of the app's texts: ur | en | ar")
 
 
 class GoogleLinkIn(serializers.Serializer):

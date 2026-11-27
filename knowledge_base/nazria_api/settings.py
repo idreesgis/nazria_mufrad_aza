@@ -52,7 +52,8 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "audit.middleware.AuditMiddleware",                  # one audit row per API / admin request
+    "audit.middleware.AuditMiddleware",                               # one audit row per API / admin request
+    "nazria_api.language.ContentLanguageMiddleware",                  # Content-Language: ur | en | ar
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -148,6 +149,9 @@ SPECTACULAR_SETTINGS = {
         "ExplanationStatusEnum": ["shown", "not_covered", "rejected", "unavailable", "disabled"],
         "RecipeStatusEnum": ["shown", "withheld_vulnerable", "withheld_condition", "withheld_hazard"],
         "RoleEnum": ["patient", "hakeem", "admin"],
+        "LanguageEnum": ["ur", "en", "ar"],
+        "DirectionEnum": ["rtl", "ltr"],
+        "SystemCodeEnum": ["nervous", "muscular", "glandular"],
     },
     "POSTPROCESSING_HOOKS": ["drf_spectacular.hooks.postprocess_schema_enums",
                              "consultations.schema.add_app_key_header"],
