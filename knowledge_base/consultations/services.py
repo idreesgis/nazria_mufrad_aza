@@ -13,14 +13,13 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from nazria_kb.engine import (VOLUME_NAMES, Assessment, EngineConfig, QuestionnaireEngine, Session, _page_ref,
-                              _pages_list)
+from nazria_kb.engine import Assessment, EngineConfig, QuestionnaireEngine, Session, passage_title
 from nazria_kb.llm_engine import (EXPLAIN_ASK, EXTERNAL_NOTICE, RagResponder, explanation_context, explanation_query,
                                   is_vulnerable)
 from nazria_kb.providers import ProviderError, build_provider
 from nazria_kb.questionnaire import SYSTEM_ORGANS, TEHREEK_MIZAJ, Question
 from nazria_kb.safety import (CONDITION_NO_RECIPE, DISCLAIMER, HAZARD_NAMES_UR, PRACTITIONER_ONLY, RED_FLAGS,
-                              VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message)
+                              VULNERABLE_NO_RECIPE, detect_red_flags, emergency_message, strip_references)
 
 from .backends import KnowledgeBase
 
@@ -167,11 +166,6 @@ def run_consultation(kb: KnowledgeBase, questions: list[Question], answers: dict
     return Outcome(s, payload, s.meta.get("assessment"))
 
 
-def _citation(volume: int, pages: list[int]) -> dict:
-    return {"volume": volume, "volume_name": VOLUME_NAMES.get(volume, ""), "pages": list(pages),
-            "text": _pages_list(volume, pages) if len(pages) > 1 else _page_ref(volume, pages)}
-
-
 def build_payload(s: Session, a: Assessment | None) -> dict:
     created = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if s.status == "emergency":
@@ -179,13 +173,11 @@ def build_payload(s: Session, a: Assessment | None) -> dict:
         return {"status": "emergency", "created_at": created,
                 "emergency": {"flags": flags, "flag_labels": [RED_FLAG_LABELS.get(f, f) for f in flags],
                               "message": emergency_message(flags)},
-                "assessment": None, "book": None, "advice": [], "disclaimer": DISCLAIMER,
+                "assessment": None, "book": None, "diet_plans": [], "advice": [], "disclaimer": DISCLAIMER,
                 "text": s.transcript[-1]["content"]}
     sc = a.score
-    vols = sc.evidence_volumes or [2] * len(sc.evidence)
-    evidence = [{"question_id": qid, "option_key": key, "question": qtext, "answer": label, "system": system,
-                 "citation": _citation(vol, pages)}
-                for (qtext, label, system, pages), (qid, key), vol in zip(sc.evidence, sc.evidence_keys, vols)]
+    evidence = [{"question_id": qid, "option_key": key, "question": qtext, "answer": label, "system": system}
+                for (qtext, label, system, _pages), (qid, key) in zip(sc.evidence, sc.evidence_keys)]
     assessment = {
         "conclusive": sc.conclusive, "primary_system": sc.primary,
         "primary_organs": SYSTEM_ORGANS.get(sc.primary) if sc.primary else None,
@@ -204,18 +196,16 @@ def build_payload(s: Session, a: Assessment | None) -> dict:
                        if a.recipe_status == "withheld_hazard" else None)
             recipe = {"status": a.recipe_status, "text": a.recipe, "dosage": a.dosage, "hazards": hazards,
                       "message": message}
-        book = {"topic": {"id": a.topic.topic_id, "title": a.topic.title,
-                          "citation": _citation(a.topic.volume_no, a.topic.pages)},
+        book = {"topic": {"id": a.topic.topic_id, "title": a.topic.title},
                 "description": a.description, "recipe": recipe, "diet": a.diet, "passages": []}
     elif a.passages:
         book = {"topic": None, "description": None, "recipe": None, "diet": None,
-                "passages": [{"context": p.context, "excerpt": ex, "citation": _citation(p.volume_no, p.pages)}
-                             for p, ex in a.passages]}
+                "passages": [{"title": passage_title(p.context), "excerpt": ex} for p, ex in a.passages]}
     from nazria_kb.engine import CHRONIC_ADVICE
     from nazria_kb.safety import MEDICATION_ADVICE
     advice = ([CHRONIC_ADVICE] if a.chronic else []) + ([MEDICATION_ADVICE] if a.caution else [])
     return {"status": "completed", "created_at": created, "emergency": None, "assessment": assessment, "book": book,
-            "advice": advice, "disclaimer": DISCLAIMER,
+            "diet_plans": a.diet_plans, "advice": advice, "disclaimer": DISCLAIMER,
             "text": s.transcript[-1]["content"]}
 
 
@@ -280,16 +270,17 @@ def explain(kb: KnowledgeBase, s: Session) -> dict:
             "external_provider": bool(provider.external),
             "notice": EXTERNAL_NOTICE.format(provider=provider.name) if provider.external else None}
     if ans.kind == "llm":
-        result = {"status": "shown", "text": ans.meta.get("body") or ans.text, "sources": [
-            {"context": src["context"], "citation": _citation(src["volume"], src["pages"])}
-            for src in ans.meta.get("sources", [])], **base}
+        # the citations proved the text is grounded; the patient sees it without book, author or page references
+        result = {"status": "shown", "text": strip_references(ans.meta.get("body") or ans.text), **base}
+        s.result["explanation_sources"] = [{"context": src["context"], "volume": src["volume"], "pages": src["pages"]}
+                                           for src in ans.meta.get("sources", [])]        # kept for review only
         s.transcript.append({"role": "hakeem", "content": "وضاحت:\n" + ans.text, "question_id": None,
                              **{k: ans.meta[k] for k in ("prompt_tokens", "completion_tokens", "latency_ms",
                                                           "source_chunk_ids") if ans.meta.get(k) is not None}})
         s.engine, s.provider, s.model = "hybrid", base["provider"], base["model"]
         s.external_provider = s.external_provider or base["external_provider"]
     elif ans.kind == "not_covered":
-        result = {"status": "not_covered", "reason": "the book passages found do not answer this", **base}
+        result = {"status": "not_covered", "reason": "the passages found do not answer this", **base}
     else:
         reason = ans.meta.get("degenerate") and "unusable_output" or (
             "no_valid_citation" if ans.meta.get("citation_missing") else ans.kind)

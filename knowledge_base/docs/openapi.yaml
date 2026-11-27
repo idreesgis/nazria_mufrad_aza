@@ -1506,7 +1506,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PassageOut'
-          description: Only when no chapter matched the complaint
+          description: Only when no topic matched the complaint
       required:
       - description
       - diet
@@ -1537,25 +1537,6 @@ components:
         * `epilepsy` - epilepsy
         * `other` - other
         * `none` - none
-    CitationOut:
-      type: object
-      properties:
-        volume:
-          type: integer
-        volume_name:
-          type: string
-        pages:
-          type: array
-          items:
-            type: integer
-        text:
-          type: string
-          description: Ready-made Urdu reference, e.g. "جلد دوم، صفحہ 127"
-      required:
-      - pages
-      - text
-      - volume
-      - volume_name
     ConsultationOut:
       type: object
       properties:
@@ -1598,6 +1579,13 @@ components:
           allOf:
           - $ref: '#/components/schemas/BookOut'
           nullable: true
+        diet_plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/DietPlanOut'
+          description: One plan for the tehreek found; two (with choose_if) when only
+            the dominant system is known; empty for an emergency or an inconclusive
+            result
         advice:
           type: array
           items:
@@ -1628,6 +1616,7 @@ components:
       - book
       - created_at
       - deleted
+      - diet_plans
       - disclaimer
       - emergency
       - explanation
@@ -1710,6 +1699,64 @@ components:
       - primary_system
       - rediagnosis_of
       - status
+    DietPlanOut:
+      type: object
+      properties:
+        tehreek:
+          type: string
+          description: The tehreek this plan is for
+        mizaj:
+          type: string
+        choose_if:
+          type: string
+          nullable: true
+          description: 'Only when two plans are given (the tehreek is not certain):
+            the feeling that tells the patient which plan applies'
+        breakfast:
+          type: array
+          items:
+            type: string
+        lunch:
+          type: array
+          items:
+            type: string
+        dinner:
+          type: array
+          items:
+            type: string
+        fruits:
+          type: array
+          items:
+            type: string
+          description: 'Empty: fruits are not advised'
+        dry_fruits:
+          type: array
+          items:
+            type: string
+          description: 'Empty: dry fruits are not advised'
+        qehwa:
+          $ref: '#/components/schemas/QehwaOut'
+        rules:
+          type: array
+          items:
+            type: string
+        notes:
+          type: array
+          items:
+            type: string
+          description: From the patient's info (diabetes …)
+      required:
+      - breakfast
+      - choose_if
+      - dinner
+      - dry_fruits
+      - fruits
+      - lunch
+      - mizaj
+      - notes
+      - qehwa
+      - rules
+      - tehreek
     EmergencyOut:
       type: object
       properties:
@@ -1754,11 +1801,9 @@ components:
           type: string
         system:
           type: string
-        citation:
-          $ref: '#/components/schemas/CitationOut'
+          description: 'The system this symptom points to: اعصابی | عضلاتی | غدی'
       required:
       - answer
-      - citation
       - option_key
       - question
       - question_id
@@ -1771,10 +1816,6 @@ components:
         text:
           type: string
           description: Only when status is shown
-        sources:
-          type: array
-          items:
-            $ref: '#/components/schemas/SourceOut'
         reason:
           type: string
         retryable:
@@ -2165,16 +2206,13 @@ components:
     PassageOut:
       type: object
       properties:
-        context:
+        title:
           type: string
         excerpt:
           type: string
-        citation:
-          $ref: '#/components/schemas/CitationOut'
       required:
-      - citation
-      - context
       - excerpt
+      - title
     PasswordChangeInRequest:
       type: object
       properties:
@@ -2640,6 +2678,22 @@ components:
           maxLength: 4000
       required:
       - video
+    QehwaOut:
+      type: object
+      properties:
+        name:
+          type: string
+        ingredients:
+          type: array
+          items:
+            type: string
+        how:
+          type: string
+          description: How to prepare it
+      required:
+      - how
+      - ingredients
+      - name
     QuestionOut:
       type: object
       properties:
@@ -2862,16 +2916,6 @@ components:
       required:
       - equals
       - question_id
-    SourceOut:
-      type: object
-      properties:
-        context:
-          type: string
-        citation:
-          $ref: '#/components/schemas/CitationOut'
-      required:
-      - citation
-      - context
     StaffPatientRowOut:
       type: object
       properties:
@@ -2957,10 +3001,7 @@ components:
           type: integer
         title:
           type: string
-        citation:
-          $ref: '#/components/schemas/CitationOut'
       required:
-      - citation
       - id
       - title
     TriageOut:

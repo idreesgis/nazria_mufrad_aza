@@ -192,8 +192,7 @@ GET  /patients/{id}/history/             every change to the general info: who, 
 - **Sign questions:** there are 17 of them, from both volumes of the book. Every one has a neutral last option
   ("معمول کے مطابق" / "ان میں سے کوئی نہیں"); for a `multi` question send `["none"]`.
   - Each label already names the book's term, e.g. «(نقرس)».
-  - In the result, every `evidence` row cites its own `volume` and `pages`, so show `citation.text`.
-  - Render the questions from `GET /questionnaire/`; don't hard-code them. A Hakeem can add, edit or switch off
+  - Render the questions from `GET /questionnaire/`; don't hard-code them. Staff can add, edit or switch off
     questions in the database, and `version` changes when they do.
 - **Required answers:** every question is required except one removed by `skip_if`. After an emergency answer,
   nothing else is needed.
@@ -208,15 +207,37 @@ GET  /patients/{id}/history/             every change to the general info: who, 
  "prefilled_answers": {"age_group": "child", "pregnancy": "na"},
  "assessment": {"conclusive": true, "primary_system": "عضلاتی", "primary_organs": "قلب و عضلات", "tehreek": null,
                 "mizaj": null, "confidence": 1.0, "totals": {"اعصابی": 0, "عضلاتی": 8, "غدی": 0}, "vulnerable": false,
-                "evidence": [{"question_id": "urine_color", "option_key": "red", "answer": "سرخ یا سرخی مائل",
-                              "system": "عضلاتی", "citation": {"volume": 2, "pages": [125, 127, 133],
-                                                              "text": "جلد دوم، صفحات 125، 127، 133"}}, …]},
- "book": {"topic": {"id": 1603, "title": "عضلاتی قبض", "citation": {"text": "جلد دوم، صفحہ 127", …}},
+                "evidence": [{"question_id": "urine_color", "option_key": "red", "question": "…",
+                              "answer": "سرخ یا سرخی مائل", "system": "عضلاتی"}, …]},
+ "book": {"topic": {"id": 1603, "title": "عضلاتی قبض"},
           "description": "…", "recipe": {"status": "shown", "text": "…", "dosage": null, "hazards": [], "message": null},
           "diet": null, "passages": []},
+ "diet_plans": [{"tehreek": "عضلاتی اعصابی", "mizaj": "سرد خشک", "choose_if": "اگر جسم میں خشکی کے ساتھ سردی محسوس ہو",
+                 "breakfast": ["…"], "lunch": ["…"], "dinner": ["…"], "fruits": ["…"], "dry_fruits": ["…"],
+                 "qehwa": {"name": "دارچینی اور لونگ کا قہوہ", "ingredients": ["…"], "how": "…"},
+                 "rules": ["…"], "notes": []}, {"tehreek": "عضلاتی غدی", …}],
  "advice": ["…"], "disclaimer": "…", "text": "<the whole result as Urdu text>",
  "explanation": null, "explanation_available": false, "pulse_analyses": [], "deleted": false}
 ```
+
+**What the patient sees.**
+- The result shows the **system findings only**: the dominant system (`primary_system`), the tehreek and mizaj, and
+  each symptom with the system it points to (`evidence`).
+- No book name, author, volume or page reference, and no "حکیم", appears anywhere in the result, the text, the
+  diet plan or the AI explanation. Referrals say «مستند معالج».
+- The page references stay in the server's question bank, for the review tools only.
+
+**Diet plan (`diet_plans`).** It is built from the diagnosed tehreek, using the corrective food group for that
+tehreek:
+- `breakfast`, `lunch` and `dinner` (foods of that one group, not mixed with others), `fruits`, `dry_fruits` and a
+  `qehwa` with ingredients and how to make it, plus general eating `rules`.
+- `notes` come from the patient's info, for example less sweet food with diabetes, less salt with high blood
+  pressure, or allergies and medicines.
+- **One plan** when the tehreek is known.
+- **Two plans** when only the dominant system is clear. Each has `choose_if`, for example "اگر جسم میں خشکی کے
+  ساتھ سردی محسوس ہو", so the patient picks the one that fits; show both with their `choose_if`.
+- **No plan** (`[]`) for an emergency or an inconclusive result.
+- An empty `fruits` or `dry_fruits` means they are not advised in that state; the text says so.
 
 | `recipe.status` | Meaning |
 |---|---|

@@ -75,11 +75,11 @@ def _run(engine, answers):
 
 def test_fallback_passages_are_hazard_and_vulnerability_checked():
     s, r = _run(QuestionnaireEngine(PassageOnlyRetriever()), [NONE_FLAG, "قبض"] + ADULT_SIGNS)
-    assert r.done and "سنکھیا" not in r.text and "صفحہ 6" in r.text and "صفحہ 7" in r.text
+    assert r.done and "سنکھیا" not in r.text and "صفحہ" not in r.text and "متعلقہ معلومات" in r.text
     elderly = ADULT_SIGNS.copy()
     elderly[1] = "3"
     s, r = _run(QuestionnaireEngine(PassageOnlyRetriever()), [NONE_FLAG, "قبض"] + elderly)
-    assert r.done and "سناء" not in r.text and "سنکھیا" not in r.text and "صفحہ 7" in r.text
+    assert r.done and "سناء" not in r.text and "سنکھیا" not in r.text and "متعلقہ معلومات" in r.text
 
 
 def test_complaint_text_triggers_emergency():
