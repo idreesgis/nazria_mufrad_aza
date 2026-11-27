@@ -6,6 +6,68 @@ info:
     analysis and optional AI explanation for the Android app, with a complete audit
     log. Guidance only, not a diagnosis.
 paths:
+  /api/v1/auth/google/:
+    post:
+      operationId: v1_auth_google_create
+      description: |-
+        Sign in with Google. Send the ID token from Credential Manager / Google Sign-In.
+
+        * A known Google account logs in (`200`, `created: false`).
+        * An unknown one creates a patient account (`201`, `created: true`), which needs `consent: true`; without it the
+          answer is `400 consent_required`: show the disclaimer and send the same request with `consent: true`.
+        * Staff accounts cannot use Google: they log in with phone + password.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLoginInRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoogleTokensOut'
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoogleTokensOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
   /api/v1/auth/login/:
     post:
       operationId: v1_auth_login_create
@@ -418,6 +480,101 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedAuditEventOutList'
           description: ''
+  /api/v1/me/google/:
+    post:
+      operationId: v1_me_google_create
+      description: |-
+        POST: link a Google account to the logged-in patient (then they can sign in with either).
+        DELETE: unlink it; only allowed when the account also has a phone and password, so nobody is locked out.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLinkInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+    delete:
+      operationId: v1_me_google_destroy
+      description: |-
+        POST: link a Google account to the logged-in patient (then they can sign in with either).
+        DELETE: unlink it; only allowed when the account also has a phone and password, so nobody is locked out.
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
   /api/v1/me/password/:
     post:
       operationId: v1_me_password_create
@@ -678,7 +835,7 @@ paths:
   /api/v1/staff/patients/:
     get:
       operationId: v1_staff_patients_list
-      description: All patients (search by phone or name), newest first.
+      description: All patients (search by phone, name or e-mail), newest first.
       parameters:
       - in: header
         name: X-Api-Key
@@ -696,7 +853,7 @@ paths:
         name: search
         schema:
           type: string
-        description: part of the phone number or name
+        description: part of the phone number, name or e-mail
       tags:
       - v1
       security:
@@ -1169,6 +1326,64 @@ components:
         * `male` - male
         * `female` - female
         * `other` - other
+    GoogleLinkInRequest:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 4096
+      required:
+      - id_token
+    GoogleLoginInRequest:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: Google ID token from Credential Manager / Google Sign-In (serverClientId
+            = the server's Web client ID)
+          maxLength: 4096
+        consent:
+          type: boolean
+          default: false
+          description: Needed (true) only when a new account is created
+        full_name:
+          type: string
+          description: 'New accounts: defaults to the Google name'
+          maxLength: 150
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/GenderEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+          nullable: true
+      required:
+      - id_token
+    GoogleTokensOut:
+      type: object
+      properties:
+        access:
+          type: string
+          description: 'Send as Authorization: Bearer <access> (valid 30 minutes)'
+        refresh:
+          type: string
+          description: Exchange at /auth/refresh/ for new tokens (valid 30 days)
+        user:
+          $ref: '#/components/schemas/ProfileOut'
+        created:
+          type: boolean
+          description: True when this sign-in created a new account
+      required:
+      - access
+      - created
+      - refresh
+      - user
     HazardOut:
       type: object
       properties:
@@ -1188,12 +1403,16 @@ components:
           type: string
         explanation_enabled:
           type: boolean
+        google_login_enabled:
+          type: boolean
+          description: Show the "Sign in with Google" button
         api_version:
           type: integer
       required:
       - api_version
       - database
       - explanation_enabled
+      - google_login_enabled
       - status
     KindEnum:
       enum:
@@ -1349,7 +1568,8 @@ components:
         old_password:
           type: string
           writeOnly: true
-          minLength: 1
+          description: Required, except for a Google account that has no password
+            yet
           maxLength: 128
         new_password:
           type: string
@@ -1358,7 +1578,6 @@ components:
           maxLength: 128
       required:
       - new_password
-      - old_password
     PatchedProfileInRequest:
       type: object
       properties:
@@ -1374,12 +1593,20 @@ components:
           maximum: 2100
           minimum: 1900
           nullable: true
+        phone:
+          type: string
+          minLength: 1
+          description: Only accepted while the account has no phone yet (Google accounts)
+          maxLength: 30
     PatientRowOut:
       type: object
       properties:
         id:
           type: integer
         phone:
+          type: string
+          nullable: true
+        email:
           type: string
         full_name:
           type: string
@@ -1399,6 +1626,7 @@ components:
       required:
       - consultations
       - created_at
+      - email
       - full_name
       - id
       - is_active
@@ -1412,6 +1640,11 @@ components:
           type: integer
         phone:
           type: string
+          nullable: true
+          description: null for a Google account until the patient adds one
+        email:
+          type: string
+          description: From Google, if linked
         full_name:
           type: string
         gender:
@@ -1428,13 +1661,24 @@ components:
         created_at:
           type: string
           format: date-time
+        has_password:
+          type: boolean
+          description: False for a Google-only account (phone login not possible)
+        linked_providers:
+          type: array
+          items:
+            type: string
+          description: e.g. ["google"]
       required:
       - birth_year
       - consent_at
       - created_at
+      - email
       - full_name
       - gender
+      - has_password
       - id
+      - linked_providers
       - phone
       - role
     PulseAnalysisOut:

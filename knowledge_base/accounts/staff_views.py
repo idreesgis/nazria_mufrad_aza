@@ -21,7 +21,8 @@ User = get_user_model()
 
 class PatientRowOut(serializers.Serializer):
     id = serializers.IntegerField()
-    phone = serializers.CharField()
+    phone = serializers.CharField(allow_null=True)
+    email = serializers.CharField(allow_blank=True)
     full_name = serializers.CharField()
     created_at = serializers.DateTimeField()
     last_login = serializers.DateTimeField(allow_null=True)
@@ -31,11 +32,11 @@ class PatientRowOut(serializers.Serializer):
 
 
 class PatientListView(generics.ListAPIView):
-    """All patients (search by phone or name), newest first."""
+    """All patients (search by phone, name or e-mail), newest first."""
     permission_classes = [HasAppKey, IsStaff]
     serializer_class = PatientRowOut
 
-    @extend_schema(parameters=[OpenApiParameter("search", str, description="part of the phone number or name")])
+    @extend_schema(parameters=[OpenApiParameter("search", str, description="part of the phone number, name or e-mail")])
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
 
@@ -45,14 +46,15 @@ class PatientListView(generics.ListAPIView):
             n_pulse=Count("user__pulse_analyses", distinct=True)).order_by("-created_at", "-pk")
         term = (self.request.query_params.get("search") or "").strip()
         if term:
-            q = q.filter(Q(phone__icontains=term) | Q(full_name__icontains=term))
+            q = q.filter(Q(phone__icontains=term) | Q(full_name__icontains=term) | Q(user__email__icontains=term))
         return q
 
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.get_queryset())
         audit(request, "staff.patients.list", "", None, search=bool(request.query_params.get("search")))
         return self.get_paginated_response([
-            {"id": p.user_id, "phone": p.phone, "full_name": p.full_name, "created_at": p.created_at,
+            {"id": p.user_id, "phone": p.phone or None, "email": p.user.email or "", "full_name": p.full_name,
+             "created_at": p.created_at,
              "last_login": p.user.last_login, "consultations": p.n_consultations, "pulse_analyses": p.n_pulse,
              "is_active": p.user.is_active} for p in page])
 

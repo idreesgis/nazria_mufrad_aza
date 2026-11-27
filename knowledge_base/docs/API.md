@@ -1,7 +1,7 @@
 # Nazria REST API: guide for the Android app
 
 This is the single backend for the app. It provides:
-- patient accounts (phone + password);
+- patient accounts (phone + password, or Sign in with Google);
 - the book-based symptom questionnaire and assessment;
 - pulse (نبض) video analysis;
 - an optional AI explanation;
@@ -46,6 +46,44 @@ tokens = {"access": "...", "refresh": "...", "user": {"id","phone","full_name","
   admin; there is no SMS yet.
 - **Consent:** `consent: true` records that the patient accepted the disclaimer: guidance, not a diagnosis.
 
+## Sign in with Google
+
+Show the Google button only when `GET /health/` says `"google_login_enabled": true`.
+
+```
+App: Credential Manager (GetGoogleIdOption / GetSignInWithGoogleOption, serverClientId = the server's WEB client ID)
+     → Google ID token (a JWT string)
+POST /auth/google/ {"id_token"}                       → 200 tokens, "created": false   (known account: logged in)
+                                                      → 400 consent_required          (new: show the disclaimer …)
+POST /auth/google/ {"id_token","consent": true,
+                    "full_name"?,"gender"?,"birth_year"?} → 201 tokens, "created": true  (… new patient account)
+```
+
+- **The response is the same `tokens` object as phone login,** plus `created`. Refresh and logout work the same way.
+- **The ID token** is checked on the server with Google's public keys: signature, expiry, issuer and that it was
+  issued for this app (`aud` = the Web client ID). It is never stored or logged. Get a fresh ID token for every
+  sign-in: they expire after an hour.
+- **A Google-only account** has `user.phone = null`, `user.has_password = false`, `user.email` set and
+  `user.linked_providers = ["google"]`. Make `phone` nullable in the Kotlin model.
+  - It can add a phone number once: `PATCH /me/ {"phone"}`. After that the phone number cannot be changed by the
+    patient (staff can).
+  - It can set a first password without an old one: `POST /me/password/ {"new_password"}`. Then phone + password
+    login also works.
+- **An existing phone account can link Google:** logged in, `POST /me/google/ {"id_token"}` → the profile. From then
+  on, either login method opens the same account and history. `DELETE /me/google/` unlinks it, but only when the
+  account also has a phone and a password (`409 last_login_method` otherwise).
+- **Accounts are matched by Google's user id, never by e-mail.** A Google account that is already linked to another
+  Nazria account gives `409 google_already_linked`. Google accounts without a verified e-mail are refused.
+- **Staff (Hakeem, admin) cannot use Google;** they log in with phone + password (`403 staff_password_only`).
+
+**Google Cloud setup** (once, in the Google Cloud console, *APIs & Services → Credentials*; the OAuth consent screen
+must be configured first):
+1. **OAuth client ID, type "Web application".** Its client ID goes into the server's `NAZRIA_GOOGLE_CLIENT_IDS` and
+   into the app as `serverClientId`. No client secret is needed anywhere.
+2. **OAuth client ID, type "Android",** with the app's package name and the SHA-1 of its signing certificate
+   (`./gradlew signingReport`; add the debug, release and Play App Signing SHA-1s). This one is not used in code:
+   it lets Google issue tokens to the app.
+
 ## Consultation flow
 
 ```
@@ -64,11 +102,12 @@ Triage and the questionnaire need no login: an emergency must never wait for one
 
 | Method and path | Who | What |
 |---|---|---|
-| `GET /health/` | anyone | `{"status","database","explanation_enabled","api_version"}`; `503` if the database is down. |
+| `GET /health/` | anyone | `{"status","database","explanation_enabled","google_login_enabled","api_version"}`; `503` if the database is down. |
 | `GET /questionnaire/` | app | Questions and options (no weights). See *Questionnaire* below. |
 | `POST /triage/` | app | `{"emergency","flags","flag_labels","message"}` |
-| `POST /auth/register/`, `/auth/login/`, `/auth/refresh/` | app | Tokens. Limited to 10 per minute per IP. |
+| `POST /auth/register/`, `/auth/login/`, `/auth/refresh/`, `/auth/google/` | app | Tokens. Limited to 10 per minute per IP. |
 | `POST /auth/logout/` · `GET`/`PATCH /me/` · `POST /me/password/` | user | Account. |
+| `POST`/`DELETE /me/google/` | patient | Link or unlink a Google account. |
 | `GET /me/activity/` | user | The patient's own audit trail, newest first. |
 | `GET /consultations/` | user | History: `[{"id","status","created_at","primary_system","explanation_status","complaint","deleted"}]` |
 | `POST /consultations/` | user | All answers in → the full result (`201`). |
@@ -79,7 +118,7 @@ Triage and the questionnaire need no login: an emergency must never wait for one
 | `POST /pulse/analyses/` | user | Multipart: `video` (mp4, mov, 3gp, webm or mkv; ≤ 100 MB), `method` (`finger` or `wrist`), `consultation` (optional id), `symptoms` (optional JSON list). Analysed immediately (`201`). |
 | `GET /pulse/analyses/{id}/` · `DELETE …` | owner, staff | One analysis. DELETE hides it; the video is kept. |
 | `GET /pulse/symptom-suggestions/` | user | Free-text symptom lists (English). |
-| `GET /staff/patients/?search=` | staff | Patients with consultation and pulse counts. |
+| `GET /staff/patients/?search=` | staff | Patients with consultation and pulse counts (search by phone, name or e-mail). |
 | `GET /staff/patients/{id}/` | staff | A patient's complete history: profile, every consultation and pulse analysis, hidden ones included. |
 | `GET /staff/audit/?user=&action=&object_id=&since=&until=` | staff | The complete audit log. `action` can be a prefix ending in `.`, for example `auth.`. |
 
@@ -156,9 +195,10 @@ Every error has the same shape: `{"error": "<code>", "detail": "<message>", "fie
 | HTTP | `error` | Meaning |
 |---|---|---|
 | 400 | `invalid_answers`, `invalid_request` | Validation failed. `fields` lists each problem. |
-| 401 | `not_authenticated`, `token_not_valid`, `invalid_credentials`, `invalid_token` | Log in, or refresh the token. |
-| 403 | `app_key_invalid`, `permission_denied` | The app key is missing or wrong, or the endpoint is for staff only. |
+| 400 | `consent_required`, `google_email_unverified` | Google sign-in: show the disclaimer and resend with `consent: true`; or use another Google account. |
+| 401 | `not_authenticated`, `token_not_valid`, `invalid_credentials`, `invalid_token`, `invalid_google_token` | Log in, or refresh the token; for Google, get a new ID token. |
+| 403 | `app_key_invalid`, `permission_denied`, `staff_password_only`, `account_disabled` | The app key is missing or wrong, the endpoint is for staff only, or the account cannot sign in this way. |
 | 404 | `not_found` | Unknown id, or not the patient's own. |
-| 409 | `not_explainable` | An explanation was requested for an emergency result. |
+| 409 | `not_explainable`, `google_already_linked`, `last_login_method`, `retry` | An explanation was requested for an emergency result; or a Google link conflict. |
 | 429 | `throttled` | Rate limit reached. Wait the number of seconds in `Retry-After`. |
-| 503 | `database_unavailable` | Try again later. |
+| 503 | `database_unavailable`, `google_unavailable`, `google_login_disabled` | Try again later; or Google sign-in is not set up on the server. |

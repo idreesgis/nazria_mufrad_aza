@@ -178,6 +178,7 @@ class HealthOut(serializers.Serializer):
     status = serializers.CharField()
     database = serializers.CharField()
     explanation_enabled = serializers.BooleanField()
+    google_login_enabled = serializers.BooleanField(help_text="Show the \"Sign in with Google\" button")
     api_version = serializers.IntegerField()
 
 

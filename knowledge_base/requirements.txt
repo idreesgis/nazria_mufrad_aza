@@ -9,6 +9,10 @@ Django>=5.2,<5.3
 djangorestframework>=3.16,<3.17
 drf-spectacular>=0.28,<0.29
 djangorestframework-simplejwt>=5.5,<5.6
+# Sign in with Google: ID-token check with Google's public keys (cached)
+google-auth>=2.40
+requests>=2.31
+CacheControl>=0.14
 pytest-django>=4.9
 # pulse-video analysis (PPG); the headless build needs no GUI libraries on the server
 opencv-python-headless>=4.10
