@@ -50,11 +50,23 @@ def make_user(phone="+923001234567", password="sabz-chai-2026", name="Test Patie
     return user
 
 
+def make_patient(account, full_name="Test Patient", relation="self", gender="male", birth_year=1985, **extra):
+    from django.utils import timezone
+
+    from patients.models import Patient, record_revision
+    p = Patient.objects.create(account=account, full_name=full_name, relation=relation, gender=gender,
+                               birth_year=birth_year, consent_at=timezone.now(), **extra)
+    record_revision(p, account, "created")
+    return p
+
+
 def logged_in(app_key, user) -> APIClient:
+    """A logged-in client; ``c.patient`` is a default adult male patient of the account (relation "self")."""
     from accounts.views import tokens_for
     c = APIClient()
     c.credentials(HTTP_X_API_KEY=app_key, HTTP_AUTHORIZATION=f"Bearer {tokens_for(user)['access']}")
     c.user = user
+    c.patient = make_patient(user)
     return c
 
 

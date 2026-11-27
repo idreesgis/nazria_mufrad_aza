@@ -119,6 +119,10 @@ server.
 | Audit log | `/admin/audit/auditevent/` or `GET /api/v1/staff/audit/`. It is append-only: the database refuses UPDATE, DELETE and TRUNCATE on it. |
 | Backups | Everything is kept permanently, so back up both the database and the videos. |
 
+**Before an update that changes the database** (for example the move to many patients per account, which assigns
+each account's existing consultations and pulse analyses to a new "self" patient): take a database backup first
+(below), then run `update.sh`.
+
 For backups:
 - **Database:** `pg_dump --schema=nazria --schema=nazria_api …`, daily.
 - **Pulse videos:** copy `/var/lib/nazria/media` with them (for example with `rsync` to another machine).

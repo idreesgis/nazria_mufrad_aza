@@ -13,8 +13,9 @@ from .conftest import REFERENCE
 pytestmark = pytest.mark.django_db
 
 
-def create(api, answers=REFERENCE):
-    return api.post("/api/v1/consultations/", {"answers": answers}, format="json")
+def create(api, answers=REFERENCE, patient=None):
+    return api.post("/api/v1/consultations/", {"answers": answers, "patient_id": str((patient or api.patient).id)},
+                    format="json")
 
 
 def token_get(api, r, suffix="", method="get"):
@@ -122,9 +123,9 @@ def test_consultation_is_stored_in_the_patients_history(api, kb, app_key):
     s = kb.sessions[uid]
     assert s.status == "completed" and s.answers["urine_color"] == "red" and len(s.transcript) == 29
     c = Consultation.objects.get(pk=uid)
-    assert c.primary_system == "عضلاتی" and c.patient == api.user and c.client.name == "android-test"
+    assert c.primary_system == "عضلاتی" and c.account == api.user and c.patient == api.patient and c.client.name == "android-test"
     got = api.get(f"/api/v1/consultations/{uid}/")
-    assert got.status_code == 200 and got.data["assessment"] == r.data["assessment"] and got.data["patient"] == api.user.pk
+    assert got.status_code == 200 and got.data["assessment"] == r.data["assessment"] and got.data["account"] == api.user.pk
     history = api.get("/api/v1/consultations/").data
     assert history["count"] == 1 and history["results"][0]["complaint"] == REFERENCE["complaint"]
     # another patient can neither see nor touch it
@@ -179,12 +180,15 @@ def test_emergency_in_the_complaint_stops_the_consultation(api):
 
 
 def test_children_get_no_recipe_and_are_not_asked_about_pregnancy(api):
-    answers = {k: v for k, v in REFERENCE.items() if k != "pregnancy"} | {"age_group": "child"}
-    r = create(api, answers)
+    from .conftest import make_patient
+    child = make_patient(api.user, "Bachcha", relation="child", birth_year=2020)
+    answers = {k: v for k, v in REFERENCE.items() if k not in ("pregnancy", "age_group")}
+    r = create(api, answers, patient=child)
     assert r.status_code == 201, r.data
     recipe = r.data["book"]["recipe"]
     assert recipe["status"] == "withheld_vulnerable" and recipe["text"] is None and recipe["message"]
     assert "سناکی" not in json.dumps(r.data, ensure_ascii=False) and r.data["assessment"]["vulnerable"]
+    assert r.data["prefilled_answers"] == {"age_group": "child", "pregnancy": "na"}
 
 
 def test_hazardous_recipes_are_never_returned(api):

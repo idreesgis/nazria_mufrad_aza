@@ -30,6 +30,8 @@ def finger_video(tmp_path, bpm=72, seconds=20, fps=30) -> bytes:
 
 
 def upload(api, data: bytes, name="pulse.mp4", **fields):
+    if "consultation" not in fields:
+        fields.setdefault("patient", str(api.patient.id))
     return api.post("/api/v1/pulse/analyses/", {"video": SimpleUploadedFile(name, data, "video/mp4"), **fields},
                     format="multipart")
 
@@ -40,7 +42,7 @@ def test_finger_video_is_analysed_and_kept_in_history(api, tmp_path, settings):
     assert r.data["status"] == "completed" and 66 <= r.data["result"]["average_heart_rate_bpm"] <= 80
     assert r.data["symptoms"] == ["Headaches", "Insomnia"] and "experimental" in r.data["disclaimer"]
     a = PulseAnalysis.objects.get(pk=r.data["id"])
-    assert a.patient == api.user and a.video.name.startswith("pulse/") and "pulse.mp4" not in a.video.name
+    assert a.account == api.user and a.patient == api.patient and a.video.name.startswith("pulse/") and "pulse.mp4" not in a.video.name
     assert api.get("/api/v1/pulse/analyses/").data["count"] == 1
     assert api.get(f"/api/v1/pulse/analyses/{a.id}/").data["result"] == r.data["result"]
     assert AuditEvent.objects.filter(action="pulse.upload", object_id=str(a.id)).exists()
@@ -61,7 +63,7 @@ def test_upload_validation(api, settings, name, size_mb, expected):
 
 
 def test_link_to_own_consultation_only(api, app_key, tmp_path):
-    c = api.post("/api/v1/consultations/", {"answers": REFERENCE}, format="json").data
+    c = api.post("/api/v1/consultations/", {"answers": REFERENCE, "patient_id": str(api.patient.id)}, format="json").data
     r = upload(api, finger_video(tmp_path, seconds=12), consultation=c["id"])
     assert r.status_code == 201 and r.data["consultation"] == c["id"]
     detail = api.get(f"/api/v1/consultations/{c['id']}/").data
