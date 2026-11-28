@@ -177,7 +177,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "    PostgreSQL URL of the existing database, e.g. postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require"
     echo "    (special characters in the password URL-encoded: @ -> %40, % -> %25, # -> %23; input is hidden)"
     read -r -s -p "    NAZRIA_DATABASE_URL: " DB_URL; echo
-    [[ "$DB_URL" == postgres* ]] || die "that is not a postgresql:// URL"
+    [[ "$DB_URL" == postgres* || "$DB_URL" == postgis* ]] || die "that is not a postgresql:// URL"
     # written by Python, so no character in the values is ever interpreted by a shell
     NZ_HOST="$PUBLIC_HOST" NZ_PORT="$PORT" NZ_DB="$DB_URL" NZ_DATA="$DATA_DIR" NZ_OUT="$ENV_FILE" \
     NZ_TEMPLATE="$DJANGO_DIR/deploy/nazria.env.example" "$VENV/bin/python" - <<'PYEOF'
@@ -217,13 +217,55 @@ grep -q '^NAZRIA_DATABASE_URL=postgres' "$ENV_FILE" || die "NAZRIA_DATABASE_URL 
 
 # ------------------------------------------------------------------------------------------------ 6. database
 step "6/11 Database connection"
-if ! (cd "$DJANGO_DIR" && timeout 60 sudo -u "$RUN_USER" -H env NAZRIA_ENV_FILE="$ENV_FILE" PYTHONDONTWRITEBYTECODE=1 \
-        "$VENV/bin/python" manage.py shell --no-imports -c \
-        'from django.db import connection; connection.ensure_connection()') >/dev/null 2>&1; then
+# connects once and explains a failure (host, port, user and the server's own message; never the password)
+if ! (cd "$DJANGO_DIR" && timeout 60 sudo -u "$RUN_USER" -H env NZ_ENV="$ENV_FILE" PYTHONDONTWRITEBYTECODE=1 \
+        "$VENV/bin/python" - <<'PYEOF'
+import os, sys
+os.environ["NAZRIA_ENV_FILE"] = os.environ["NZ_ENV"]
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nazria_api.settings")
+import django
+django.setup()                                       # reads the URL exactly as the API will (postgis:// too)
+from django.conf import settings
+from django.db import connection
+db = settings.DATABASES["default"]
+where = (f"host {db['HOST'] or '(local socket)'}, port {db['PORT'] or 5432}, user {db['USER'] or '?'}, "
+         f"database {db['NAME'] or '?'}, sslmode {db['OPTIONS'].get('sslmode', '(default: prefer)')}")
+try:
+    connection.ensure_connection()
+except Exception as e:                               # noqa: BLE001 - explain, then stop
+    msg = " ".join(str(e).split())
+    if db["PASSWORD"]:
+        msg = msg.replace(db["PASSWORD"], "***")
+    low = msg.lower()
+    hints = []
+    if "does not support ssl" in low:
+        hints.append("This PostgreSQL has no SSL: change ?sslmode=require to ?sslmode=disable in the URL "
+                     "(fine for a database on this same server).")
+    if "connection refused" in low:
+        hints.append("Nothing listens at that host and port. Is PostgreSQL running (systemctl status postgresql), "
+                     "or in Docker on another port (docker ps)? For a database on this server use host 127.0.0.1.")
+    if "timeout" in low or "timed out" in low or "closed the connection unexpectedly" in low:
+        hints.append("No answer: a firewall or IP allowlist blocks this server, or the host is wrong.")
+    if "password authentication failed" in low or "no password supplied" in low:
+        hints.append("Wrong user or password in the URL (special characters URL-encoded: @ %40, # %23, % %25, & %26).")
+    if "no pg_hba.conf entry" in low:
+        hints.append("PostgreSQL refuses this user/host in its pg_hba.conf (the database owner's setting).")
+    if "does not exist" in low:
+        hints.append("The database or user name in the URL does not exist on that server.")
+    if "could not translate host name" in low or "name or service not known" in low:
+        hints.append("The host name in the URL cannot be resolved.")
+    print(f"    tried: {where}")
+    print(f"    error: {msg[:500]}")
+    for h in hints:
+        print(f"    hint:  {h}")
+    sys.exit(1)
+print(f"    {where}")
+PYEOF
+); then
     echo
-    echo "  The database cannot be reached from this server (timeout or connection refused)."
-    echo "  This is usually the database firewall or IP allowlist: add this server's public IP there."
-    echo "  Also check host, port and user in NAZRIA_DATABASE_URL ($ENV_FILE). No database setting was changed."
+    echo "  The database cannot be reached from this server. Fix NAZRIA_DATABASE_URL in $ENV_FILE"
+    echo "  (sudo nano $ENV_FILE) or the database's firewall/allowlist, then run this script again."
+    echo "  No database setting was changed."
     die "database not reachable"
 fi
 info "connected"
