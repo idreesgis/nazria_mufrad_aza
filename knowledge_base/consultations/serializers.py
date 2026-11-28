@@ -232,6 +232,14 @@ class HealthOut(serializers.Serializer):
     database = serializers.CharField()
     explanation_enabled = serializers.BooleanField()
     google_login_enabled = serializers.BooleanField(help_text="Show the \"Sign in with Google\" button")
+    social_providers = serializers.ListField(
+        child=serializers.ChoiceField(choices=["google", "facebook", "apple", "microsoft"]),
+        help_text="The social sign-in buttons to show, in this order")
+    social_config = serializers.DictField(
+        child=serializers.DictField(), help_text='Public IDs to start each sign-in, e.g. {"google": {"client_id": '
+                                                 '"…"}, "facebook": {"app_id": "…"}, "apple": {"client_id": "…", '
+                                                 '"start_url": "https://…/auth/apple/start/"}, "microsoft": '
+                                                 '{"client_id": "…", "tenant": "common"}}. Never secrets.')
     api_version = serializers.IntegerField()
 
 

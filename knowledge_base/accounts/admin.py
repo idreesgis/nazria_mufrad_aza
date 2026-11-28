@@ -14,11 +14,18 @@ class PatientProfileAdmin(admin.ModelAdmin):
 
 
 @admin.register(SocialAccount)
-class SocialAccountAdmin(admin.ModelAdmin):
+class LegacyGoogleLinkAdmin(admin.ModelAdmin):
+    """The Google links from before django-allauth (copied to "Social accounts"); kept as a record, read-only."""
     list_display = ("provider", "email", "user", "created_at", "last_login_at")
     list_filter = ("provider",)
     search_fields = ("email", "user__username")
     readonly_fields = ("user", "provider", "uid", "email", "email_verified", "name", "created_at", "last_login_at")
 
     def has_add_permission(self, request):
-        return False                     # linked from the app only (the Google token proves the account)
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

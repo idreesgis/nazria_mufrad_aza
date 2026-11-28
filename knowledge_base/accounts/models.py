@@ -1,5 +1,6 @@
-"""Patients log in with their phone number (the Django username is the canonical phone number) or with Google
-(``SocialAccount``; a Google-only patient has no phone until they add one).
+"""Patients log in with their phone number (the Django username is the canonical phone number) or with Google,
+Facebook, Apple or Microsoft (django-allauth's ``socialaccount.SocialAccount``; a patient who signed up that way has no
+phone until they add one).
 Staff (Hakeem, admin) are Django users with is_staff, in the group "hakeem" (or superusers)."""
 from __future__ import annotations
 
@@ -34,8 +35,8 @@ class PatientProfile(models.Model):
 
 
 class SocialAccount(models.Model):
-    """A Google (or later another provider's) identity linked to a user. ``uid`` is the provider's stable user id
-    (Google's ``sub``), never the e-mail address, which can change."""
+    """**Legacy, read-only.** The Google links made before the move to django-allauth. Migration 0005 copied every row
+    into allauth's ``socialaccount.SocialAccount``, which the API uses now; this table is kept unchanged as a record."""
     PROVIDERS = [("google", "Google")]
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="social_accounts")
     provider = models.CharField(max_length=20, choices=PROVIDERS)
@@ -47,6 +48,7 @@ class SocialAccount(models.Model):
     last_login_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        verbose_name = "Google link (before allauth)"
         constraints = [models.UniqueConstraint(fields=["provider", "uid"], name="social_provider_uid_unique"),
                        models.UniqueConstraint(fields=["user", "provider"], name="social_user_provider_unique")]
         ordering = ["-created_at"]
