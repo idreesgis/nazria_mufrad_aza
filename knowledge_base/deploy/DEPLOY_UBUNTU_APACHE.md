@@ -24,6 +24,43 @@ This setup was tested end to end with Apache 2.4 and Python 3.12. The tested req
 
 Replace `203.0.113.10` everywhere below with **your server's public IP**.
 
+## The quick way: one script
+
+[`deploy_apache.sh`](deploy_apache.sh) does every step of this guide by itself, sections 1 to 10:
+- packages and Python 3.12, the service user and folders;
+- git, the venv, `requirements.txt` and the configuration file;
+- the database, the app key and the first administrator;
+- gunicorn, Apache on port 95, the firewall and the checks.
+
+Its paths are set at the top: the project in `/home/python-www/nazria_mufrad_aza`, the venv in
+`/home/python-www/nazria_mufrad_aza/venv`, and the site in `/etc/apache2/sites-available/nazria.conf`.
+
+```bash
+# the repository is private: copy the script to the server first (scp, or paste it into nano), then:
+sudo bash deploy_apache.sh
+```
+
+**First run:**
+- It asks for the server's public IP and the database URL (the URL is typed hidden, and never printed or logged).
+- It generates `DJANGO_SECRET_KEY` and writes `/etc/nazria/nazria.env` (mode 640).
+- It prints the Android **app key once**, and offers to create the first administrator.
+- If the server cannot read the GitHub repository yet, it prints a **deploy key** to add on GitHub
+  (Settings → Deploy keys) and stops. Run it again after adding the key.
+
+**Every later run is an update:** pull, requirements, migrations, restart, checks. It asks nothing.
+
+**It never:**
+- deletes data or changes database settings;
+- overwrites `/etc/nazria/nazria.env` once it exists;
+- touches Apache's other sites.
+
+If the database cannot be reached, it stops and says so. Add the server's IP to the database allowlist and run it
+again.
+
+Settings can be changed when running it, for example: `sudo PORT=8095 APP_DIR=/srv/nazria bash deploy_apache.sh`.
+
+The sections below are the same steps by hand, with the reasons for each.
+
 ---
 
 ## 0. Before you start
