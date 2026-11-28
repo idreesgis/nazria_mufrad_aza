@@ -5,6 +5,9 @@ existing database: knowledge base in schema `nazria`, the API's own tables in `n
 
 It was tested on Ubuntu 24.04 LTS with Python 3.12. Run every command as a user with `sudo`.
 
+**Apache instead of nginx, or Ubuntu 22.04:** see [DEPLOY_UBUNTU_APACHE.md](DEPLOY_UBUNTU_APACHE.md) (Apache on port
+95; Python 3.12 from the deadsnakes PPA, because Ubuntu 22.04's Python 3.10 is too old for the Gemini library).
+
 > **Plain HTTP, for now:** phone numbers, passwords and symptoms cross the network unencrypted. Use it for testing
 > and a closed pilot, and move to HTTPS ([section 9](#9-later-https)) before real patients use the app.
 
