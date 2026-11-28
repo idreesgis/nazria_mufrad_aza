@@ -270,7 +270,8 @@ grep -qE '^NAZRIA_DATABASE_URL=(postgres|postgis)' "$ENV_FILE" || die "NAZRIA_DA
 # ------------------------------------------------------------------------------------------------ 6. database
 step "6/11 Database connection"
 # connects once and explains a failure (host, port, user and the server's own message; never the password)
-if ! (cd "$DJANGO_DIR" && timeout 60 sudo -u "$RUN_USER" -H env NZ_ENV="$ENV_FILE" PYTHONDONTWRITEBYTECODE=1 \
+db_check() {
+    (cd "$DJANGO_DIR" && timeout 60 sudo -u "$RUN_USER" -H env NZ_ENV="$ENV_FILE" PYTHONDONTWRITEBYTECODE=1 \
         "$VENV/bin/python" - <<'PYEOF'
 import os, sys
 os.environ["NAZRIA_ENV_FILE"] = os.environ["NZ_ENV"]
@@ -286,6 +287,12 @@ try:
     connection.ensure_connection()
 except Exception as e:                               # noqa: BLE001 - explain, then stop
     msg = " ".join(str(e).split())
+    import re as _re
+    m = _re.search(r"PostgreSQL (\d+) or later is required \(found ([\d.]+)\)", msg)
+    if m and int(m.group(2).split(".")[0]) in (12, 13):
+        print(f"    {where}")
+        print(f"    PostgreSQL {m.group(2)}: Django 5.2 needs {m.group(1)} or newer")
+        sys.exit(4)
     if db["PASSWORD"]:
         msg = msg.replace(db["PASSWORD"], "***")
     low = msg.lower()
@@ -320,7 +327,42 @@ except Exception as e:                               # noqa: BLE001 - explain, t
     sys.exit(1)
 print(f"    {where}")
 PYEOF
-); then
+)
+}
+set_env_value() {    # $1 = name, $2 = value: replaces (or adds) one line of the settings file, all at once
+    NZ_OUT="$ENV_FILE" NZ_KEY="$1" NZ_VAL="$2" "$PY" -c '
+import os, re, tempfile
+e = os.environ
+text = open(e["NZ_OUT"], encoding="utf-8").read()
+line = e["NZ_KEY"] + "=" + e["NZ_VAL"]
+text, n = re.subn("(?m)^" + re.escape(e["NZ_KEY"]) + "=.*$", lambda m: line, text)
+if not n:
+    text = text.rstrip("\n") + "\n" + line + "\n"
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(e["NZ_OUT"]), prefix=".nazria.env.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write(text)
+os.chmod(tmp, 0o640)
+os.replace(tmp, e["NZ_OUT"])
+'
+    chown root:"$RUN_USER" "$ENV_FILE"; chmod 640 "$ENV_FILE"
+}
+DB_RC=0; db_check || DB_RC=$?
+if [[ $DB_RC -eq 4 ]]; then
+    echo
+    echo "  This PostgreSQL is older than Django 5.2 supports (14+). The API can still use it: the project's"
+    echo "  migrations and its full test suite pass on PostgreSQL 12. But PostgreSQL 12 and 13 get no security fixes"
+    echo "  any more, so upgrade the database server when you can. Nothing in PostgreSQL is changed by this."
+    if grep -q '^NAZRIA_ALLOW_POSTGRES_12=true' "$ENV_FILE"; then
+        die "NAZRIA_ALLOW_POSTGRES_12=true is set but was not used: check $ENV_FILE"
+    fi
+    ANSWER=no
+    if interactive; then read -r -p "    Use this PostgreSQL anyway (sets NAZRIA_ALLOW_POSTGRES_12=true)? [y/N]: " ANSWER; fi
+    [[ "$ANSWER" =~ ^[Yy] ]] || die "PostgreSQL too old; to accept it, run the script in a terminal and answer y"
+    set_env_value NAZRIA_ALLOW_POSTGRES_12 true
+    info "NAZRIA_ALLOW_POSTGRES_12=true written to $ENV_FILE"
+    DB_RC=0; db_check || DB_RC=$?
+fi
+if [[ $DB_RC -ne 0 ]]; then
     echo
     echo "  The database cannot be reached from this server. Enter the database again with"
     echo "    sudo bash $0 --set-database"

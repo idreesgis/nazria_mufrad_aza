@@ -54,6 +54,10 @@ sudo bash deploy_apache.sh
 - It asks for the server's public IP and the database: host, port, name, user and password, the password typed
   hidden. Type the password **exactly as it is**: the script encodes characters like `%`, `@` or `#` itself. It
   never prints or logs the password.
+- **PostgreSQL 12 or 13:** Django 5.2 needs PostgreSQL 14 or newer. With an older server, the script explains this
+  and asks once whether to use it anyway. Answering `y` writes `NAZRIA_ALLOW_POSTGRES_12=true` into the settings,
+  and nothing in PostgreSQL is changed. The project's migrations and its full test suite pass on PostgreSQL 12, but
+  12 and 13 no longer get security fixes, so upgrade the database server when you can.
 - To enter the database again later (wrong password, new server): `sudo bash deploy_apache.sh --set-database`.
   The previous settings are kept as `/etc/nazria/nazria.env.bak`.
 - It generates `DJANGO_SECRET_KEY` and writes `/etc/nazria/nazria.env` (mode 640).

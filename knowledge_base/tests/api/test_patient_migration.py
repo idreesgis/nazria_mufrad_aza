@@ -8,8 +8,18 @@ BEFORE = [("accounts", "0003_social_login"), ("consultations", "0002_patient_own
           ("pulse", "0001_initial")]
 
 
+@pytest.fixture
+def allow_test_cleanup():
+    """A transactional test ends by emptying every table (TRUNCATE). On PostgreSQL the audit log refuses that by
+    design (audit.0002), so the trigger is switched off for the cleanup, in this throwaway test database only."""
+    yield
+    if connection.vendor == "postgresql":
+        with connection.cursor() as c:
+            c.execute("ALTER TABLE audit_auditevent DISABLE TRIGGER audit_auditevent_no_truncate")
+
+
 @pytest.mark.django_db(transaction=True)
-def test_existing_history_is_moved_to_a_self_patient():
+def test_existing_history_is_moved_to_a_self_patient(allow_test_cleanup):
     ex = MigrationExecutor(connection)
     latest = ex.loader.graph.leaf_nodes()
     ex.migrate(BEFORE)

@@ -419,3 +419,32 @@ def test_an_upload_refused_before_it_is_read_is_still_drained(anon, settings, li
         drain.DrainUnreadBodyMiddleware.__call__ = real
     assert r.status_code == 401 and seen["status"] == 401
     assert seen["left"] == left
+
+
+# ---------------------------------------------------------------- PostgreSQL 12/13 (NAZRIA_ALLOW_POSTGRES_12)
+def test_postgres_12_backend_is_django_postgresql_with_a_lower_minimum():
+    """Only the minimum version differs; the full suite runs on a real PostgreSQL 12 with
+    NAZRIA_TEST_DATABASE_URL=… NAZRIA_ALLOW_POSTGRES_12=true pytest tests/api --ds=nazria_api.settings_test_pg"""
+    from django.db.backends.postgresql import base as django_pg
+
+    from nazria_api.db_pg12 import base
+    assert base.DatabaseFeatures.minimum_database_version == (12,)
+    assert django_pg.DatabaseWrapper.features_class.minimum_database_version >= (14,)
+    assert issubclass(base.DatabaseWrapper, django_pg.DatabaseWrapper)
+    assert base.DatabaseWrapper.vendor == "postgresql"
+
+
+def test_postgres_12_switch_selects_the_backend(monkeypatch):
+    import importlib
+
+    import nazria_api.settings as s
+    monkeypatch.setenv("NAZRIA_DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "x" * 60)
+    monkeypatch.setenv("NAZRIA_ALLOW_POSTGRES_12", "true")
+    try:
+        assert importlib.reload(s).DATABASES["default"]["ENGINE"] == "nazria_api.db_pg12"
+        monkeypatch.setenv("NAZRIA_ALLOW_POSTGRES_12", "false")
+        assert importlib.reload(s).DATABASES["default"]["ENGINE"] == "django.db.backends.postgresql"
+    finally:
+        monkeypatch.delenv("NAZRIA_ALLOW_POSTGRES_12")
+        importlib.reload(s)
