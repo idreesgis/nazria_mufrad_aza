@@ -55,28 +55,28 @@ class RefreshIn(serializers.Serializer):
 
 class PasswordChangeIn(serializers.Serializer):
     old_password = serializers.CharField(write_only=True, max_length=128, required=False, allow_blank=True,
-                                         help_text="Required, except for a Google account that has no password yet")
+                                         help_text="Required, except for a social-login account that has no password yet")
     new_password = serializers.CharField(write_only=True, min_length=8, max_length=128)
 
 
 class ProfileOut(serializers.Serializer):
     id = serializers.IntegerField()
-    phone = serializers.CharField(allow_null=True, help_text="null for a Google account until the patient adds one")
-    email = serializers.CharField(allow_blank=True, help_text="From Google, if linked")
+    phone = serializers.CharField(allow_null=True, help_text="null for a social-login account until the patient adds one")
+    email = serializers.CharField(allow_blank=True, help_text="From the linked provider (Google, Facebook, Apple, Microsoft), if any")
     full_name = serializers.CharField()
     gender = serializers.CharField()
     birth_year = serializers.IntegerField(allow_null=True)
     role = serializers.ChoiceField(choices=["patient", "hakeem", "admin"])
     consent_at = serializers.DateTimeField(allow_null=True)
     created_at = serializers.DateTimeField()
-    has_password = serializers.BooleanField(help_text="False for a Google-only account (phone login not possible)")
+    has_password = serializers.BooleanField(help_text="False for a social-login-only account (phone login not possible)")
     language = serializers.ChoiceField(choices=["ur", "en", "ar"])
-    linked_providers = serializers.ListField(child=serializers.CharField(), help_text='e.g. ["google"]')
+    linked_providers = serializers.ListField(child=serializers.CharField(), help_text='Any of google, facebook, apple, microsoft')
 
 
 class ProfileIn(serializers.ModelSerializer):
     phone = serializers.CharField(max_length=30, required=False,
-                                  help_text="Only accepted while the account has no phone yet (Google accounts)")
+                                  help_text="Only accepted while the account has no phone yet (social-login accounts)")
 
     class Meta:
         model = PatientProfile
@@ -92,21 +92,48 @@ class ProfileIn(serializers.ModelSerializer):
         return phone
 
 
-class GoogleLoginIn(serializers.Serializer):
-    id_token = serializers.CharField(max_length=4096, write_only=True,
-                                     help_text="Google ID token from Credential Manager / Google Sign-In "
-                                               "(serverClientId = the server's Web client ID)")
+_TOKEN_HELP = ("google: id_token (Credential Manager, serverClientId = the server's Web client ID) · "
+               "facebook: access_token (Facebook Login SDK) · apple: id_token + nonce · "
+               "microsoft: id_token (AppAuth, authorization code + PKCE)")
+
+
+class SocialTokenIn(serializers.Serializer):
+    id_token = serializers.CharField(max_length=8192, required=False, write_only=True, help_text=_TOKEN_HELP)
+    access_token = serializers.CharField(max_length=4096, required=False, write_only=True,
+                                         help_text="Facebook only: the access token from the Facebook Login SDK")
+    nonce = serializers.CharField(max_length=256, required=False, write_only=True,
+                                  help_text="Apple only: the raw nonce; its SHA-256 (hex) was sent to Apple")
+
+    def validate(self, attrs):
+        if not attrs.get("id_token") and not attrs.get("access_token") and not attrs.get("signup_token"):
+            raise serializers.ValidationError({"id_token": "send the provider's id_token or access_token"})
+        return attrs
+
+
+class SocialLoginIn(SocialTokenIn):
+    signup_token = serializers.CharField(max_length=4096, required=False, write_only=True,
+                                         help_text="From a 400 consent_required answer: send it back (instead of the "
+                                                   "provider token) with consent: true to create the account")
     consent = serializers.BooleanField(required=False, default=False,
                                        help_text="Needed (true) only when a new account is created")
     full_name = serializers.CharField(max_length=150, required=False, allow_blank=True,
-                                      help_text="New accounts: defaults to the Google name")
+                                      help_text="New accounts: defaults to the name from the provider")
     gender = serializers.ChoiceField(choices=["male", "female", "other"], required=False, allow_blank=True)
     birth_year = serializers.IntegerField(min_value=1900, max_value=2100, required=False, allow_null=True)
-    language = serializers.ChoiceField(choices=["ur", "en", "ar"], required=False, help_text="Language of the app's texts: ur | en | ar")
+    language = serializers.ChoiceField(choices=["ur", "en", "ar"], required=False,
+                                       help_text="Language of the app's texts: ur | en | ar")
 
 
-class GoogleLinkIn(serializers.Serializer):
-    id_token = serializers.CharField(max_length=4096, write_only=True)
+class SocialLinkIn(SocialTokenIn):
+    pass
+
+
+class GoogleLoginIn(SocialLoginIn):
+    """The older Google-only route (same as /auth/social/google/)."""
+
+
+class GoogleLinkIn(SocialLinkIn):
+    pass
 
 
 class TokensOut(serializers.Serializer):
@@ -115,5 +142,9 @@ class TokensOut(serializers.Serializer):
     user = ProfileOut()
 
 
-class GoogleTokensOut(TokensOut):
+class SocialTokensOut(TokensOut):
     created = serializers.BooleanField(help_text="True when this sign-in created a new account")
+    provider = serializers.ChoiceField(choices=["google", "facebook", "apple", "microsoft"])
+
+
+GoogleTokensOut = SocialTokensOut

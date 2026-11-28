@@ -1,4 +1,4 @@
-"""Patient registration and login with phone + password or Google (JWT), profile, password change, logout."""
+"""Patient registration and login with phone + password or Google, Facebook, Apple, Microsoft (JWT), profile, password change, logout."""
 from __future__ import annotations
 
 from django.contrib.auth import authenticate, get_user_model
@@ -15,9 +15,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from audit.middleware import audit
 from consultations.serializers import ErrorOut
 
-from . import google
+from allauth.socialaccount.models import SocialAccount as SocialLink
+
 from . import serializers as S
-from .models import CONSENT_VERSION, PatientProfile, SocialAccount, role_of
+from . import social
+from .models import CONSENT_VERSION, PatientProfile, role_of
 from .permissions import HasAppKey
 from .phone import normalize_phone
 from .throttles import AuthRateThrottle
@@ -33,7 +35,7 @@ def profile_of(user) -> dict:
             "gender": p.gender if p else "", "birth_year": p.birth_year if p else None, "role": role_of(user),
             "consent_at": p.consent_at if p else None, "created_at": p.created_at if p else user.date_joined,
             "has_password": user.has_usable_password(), "language": (p.language if p else None) or "ur",
-            "linked_providers": sorted(SocialAccount.objects.filter(user=user).values_list("provider", flat=True))}
+            "linked_providers": sorted(SocialLink.objects.filter(user=user).values_list("provider", flat=True))}
 
 
 def tokens_for(user) -> dict:
@@ -145,7 +147,7 @@ class MeView(APIView):
         data.is_valid(raise_exception=True)
         with transaction.atomic():
             data.save()
-            if "phone" in data.validated_data:       # a Google account adds its phone: phone login works from now on
+            if "phone" in data.validated_data:       # a social-login account adds its phone: phone login works from now on
                 User.objects.filter(pk=request.user.pk).update(username=data.validated_data["phone"])
         audit(request, "profile.update", "user", request.user.pk, fields=sorted(data.validated_data))
         return Response(profile_of(request.user))
@@ -159,7 +161,7 @@ class PasswordView(APIView):
     def post(self, request):
         data = S.PasswordChangeIn(data=request.data)
         data.is_valid(raise_exception=True)
-        first_password = not request.user.has_usable_password()     # Google account setting a password
+        first_password = not request.user.has_usable_password()     # social-login account setting a password
         if not first_password and not request.user.check_password(data.validated_data.get("old_password") or ""):
             audit(request, "auth.password_change_failed", "user", request.user.pk)
             return Response({"error": "invalid_credentials", "detail": "the current password is wrong"}, status=400)
@@ -176,145 +178,227 @@ class PasswordView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# ------------------------------------------------------------------------------------------- Google sign-in
-def _google_error(e: Exception) -> Response:
-    if isinstance(e, google.GoogleUnavailable):
-        return Response({"error": "google_unavailable", "detail": "Google could not be reached, try again later"},
-                        status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    return Response({"error": "invalid_google_token", "detail": "the Google sign-in is invalid or expired, try again"},
-                    status=status.HTTP_401_UNAUTHORIZED)
+# ------------------------------------------------------------------------------------------- social sign-in
+# The older Google-only routes (/auth/google/, /me/google/) answer with their original error codes.
+_LEGACY_GOOGLE_CODES = {"provider_disabled": "google_login_disabled", "invalid_social_token": "invalid_google_token",
+                        "provider_unavailable": "google_unavailable", "email_unverified": "google_email_unverified",
+                        "social_already_linked": "google_already_linked"}
 
 
-def _google_disabled() -> Response:
-    return Response({"error": "google_login_disabled", "detail": "Google sign-in is not set up on this server"},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE)
+def _err(code: str, detail: str, http: int, legacy: bool, **extra) -> Response:
+    return Response({"error": _LEGACY_GOOGLE_CODES.get(code, code) if legacy else code, "detail": detail, **extra},
+                    status=http)
 
 
-def _unverified() -> Response:
-    return Response({"error": "google_email_unverified", "detail": "this Google account's e-mail is not verified"},
-                    status=status.HTTP_400_BAD_REQUEST)
+def _check_provider(provider: str, legacy: bool) -> Response | None:
+    if provider not in social.PROVIDERS:
+        return Response({"error": "not_found", "detail": "unknown sign-in provider"}, status=404)
+    if not social.enabled(provider):
+        return _err("provider_disabled", f"{social.NAMES[provider]} sign-in is not set up on this server", 503, legacy)
+    return None
 
 
-class GoogleLoginView(APIView):
-    """Sign in with Google. Send the ID token from Credential Manager / Google Sign-In.
+def _verify(request, provider: str, d: dict, legacy: bool, action: str, user_id=None):
+    """(identity, None) or (None, error response)."""
+    token = {k: d[k] for k in ("id_token", "access_token", "nonce") if d.get(k)}
+    name = social.NAMES[provider]
+    try:
+        ident = social.verify(request, provider, token)
+    except social.ProviderDisabled:
+        return None, _check_provider(provider, legacy)
+    except social.SocialUnavailable:
+        audit(request, action, "user", user_id, provider=provider, reason="unavailable")
+        return None, _err("provider_unavailable", f"{name} could not be reached, try again later", 503, legacy)
+    except social.SocialTokenInvalid:
+        audit(request, action, "user", user_id, provider=provider, reason="invalid_token")
+        return None, _err("invalid_social_token", f"the {name} sign-in is invalid or expired, try again", 401, legacy)
+    if provider == "google" and not ident.email_verified:      # as before the move to allauth
+        audit(request, action, "user", user_id, provider=provider, reason="email_unverified")
+        return None, _err("email_unverified", "this Google account's e-mail is not verified", 400, legacy)
+    return ident, None
 
-    * A known Google account logs in (`200`, `created: false`).
-    * An unknown one creates a patient account (`201`, `created: true`), which needs `consent: true`; without it the
-      answer is `400 consent_required`: show the disclaimer and send the same request with `consent: true`.
-    * Staff accounts cannot use Google: they log in with phone + password.
+
+def _create_account(request, ident: social.SocialIdentity, d: dict):
+    with transaction.atomic():
+        user = User(username=f"{ident.provider[0]}_{ident.uid}"[:150], email=ident.email)
+        user.set_unusable_password()
+        user.save()
+        PatientProfile.objects.create(user=user, phone=None, full_name=d.get("full_name") or ident.name,
+                                      gender=d.get("gender") or "", birth_year=d.get("birth_year"),
+                                      consent_at=timezone.now(), consent_version=CONSENT_VERSION,
+                                      language=d.get("language") or request_language(request))
+        SocialLink.objects.create(user=user, provider=ident.provider, uid=ident.uid, extra_data=_extra(ident))
+    return user
+
+
+def _extra(ident: social.SocialIdentity) -> dict:
+    """What allauth keeps about the provider account: e-mail and name only (no tokens, no photo)."""
+    return {"email": ident.email, "email_verified": ident.email_verified, "name": ident.name,
+            **({"tid": ident.extra["tid"]} if "tid" in ident.extra else {})}
+
+
+class SocialLoginView(APIView):
+    """Sign in with Google, Facebook, Apple or Microsoft (`provider` in the URL).
+
+    Send what the provider's SDK gave the app: `id_token` (Google, Apple + `nonce`, Microsoft) or `access_token`
+    (Facebook). GET /health/ lists the providers that are on (`social_providers`) and their public IDs.
+
+    * A known provider account logs in (`200`, `created: false`).
+    * An unknown one creates a patient account (`201`, `created: true`), which needs the patient's consent: the first
+      answer is `400 consent_required` with a `signup_token`. Show the disclaimer, then send `signup_token` (not the
+      provider token again) with `consent: true`.
+    * Accounts are never matched by e-mail address. To add a provider to an existing account, log in and use
+      `POST /me/social/<provider>/`.
+    * Staff accounts cannot use social sign-in: they log in with phone + password.
     """
     authentication_classes: list = []
     permission_classes = [HasAppKey]
     throttle_classes = [AuthRateThrottle]
+    legacy = False
 
-    @extend_schema(request=S.GoogleLoginIn, responses={200: S.GoogleTokensOut, 201: S.GoogleTokensOut, 400: ErrorOut,
-                                                        401: ErrorOut, 403: ErrorOut, 503: ErrorOut}, auth=[])
-    def post(self, request):
-        if not google.enabled():
-            return _google_disabled()
-        data = S.GoogleLoginIn(data=request.data)
+    @extend_schema(request=S.SocialLoginIn, responses={200: S.SocialTokensOut, 201: S.SocialTokensOut, 400: ErrorOut,
+                                                        401: ErrorOut, 403: ErrorOut, 404: ErrorOut, 409: ErrorOut,
+                                                        503: ErrorOut}, auth=[])
+    def post(self, request, provider: str = "google"):
+        if (bad := _check_provider(provider, self.legacy)) is not None:
+            return bad
+        data = S.SocialLoginIn(data=request.data)
         data.is_valid(raise_exception=True)
         d = data.validated_data
-        try:
-            ident = google.verify(d["id_token"])
-        except (google.GoogleTokenInvalid, google.GoogleUnavailable) as e:
-            audit(request, "auth.google_failed", "user", None, reason=type(e).__name__)
-            return _google_error(e)
-        if not ident.email_verified:
-            audit(request, "auth.google_failed", "user", None, reason="email_unverified")
-            return _unverified()
+        if d.get("signup_token"):
+            try:
+                ident = social.from_signup_token(d["signup_token"], provider)
+            except social.SocialTokenInvalid:
+                audit(request, "auth.social_failed", "user", None, provider=provider, reason="signup_token")
+                return _err("invalid_social_token", "the sign-up has expired, sign in again", 401, self.legacy)
+        else:
+            ident, error = _verify(request, provider, d, self.legacy, "auth.social_failed")
+            if error is not None:
+                return error
 
-        link = SocialAccount.objects.select_related("user").filter(provider="google", uid=ident.sub).first()
+        link = SocialLink.objects.select_related("user").filter(provider=provider, uid=ident.uid).first()
         created = False
         if link is not None:
             user = link.user
             if not user.is_active:
-                audit(request, "auth.google_failed", "user", user.pk, reason="inactive")
+                audit(request, "auth.social_failed", "user", user.pk, provider=provider, reason="inactive")
                 return Response({"error": "account_disabled", "detail": "this account is disabled"}, status=403)
             if role_of(user) != "patient":
-                audit(request, "auth.google_failed", "user", user.pk, reason="staff")
+                audit(request, "auth.social_failed", "user", user.pk, provider=provider, reason="staff")
                 return Response({"error": "staff_password_only", "detail": "staff log in with phone and password"},
                                 status=403)
-            SocialAccount.objects.filter(pk=link.pk).update(last_login_at=timezone.now(), email=ident.email,
-                                                            email_verified=True, name=ident.name)
-            if ident.email and user.email != ident.email:
+            SocialLink.objects.filter(pk=link.pk).update(last_login=timezone.now(),
+                                                         extra_data={**(link.extra_data or {}), **_extra(ident)})
+            if ident.email and ident.email_verified and user.email != ident.email:
                 User.objects.filter(pk=user.pk).update(email=ident.email)
                 user.email = ident.email
         else:
             if d.get("consent") is not True:
-                audit(request, "auth.google_consent_required", "user", None)
-                return Response({"error": "consent_required",
-                                 "detail": "new account: show the disclaimer, then send consent: true"}, status=400)
+                audit(request, "auth.social_consent_required", "user", None, provider=provider)
+                return Response({"error": "consent_required", "signup_token": social.signup_token(ident),
+                                 "detail": "new account: show the disclaimer, then send signup_token with consent: true"},
+                                status=400)
             try:
-                with transaction.atomic():
-                    user = User(username=f"g_{ident.sub}"[:150], email=ident.email)
-                    user.set_unusable_password()
-                    user.save()
-                    PatientProfile.objects.create(user=user, phone=None, full_name=d.get("full_name") or ident.name,
-                                                  gender=d.get("gender") or "", birth_year=d.get("birth_year"),
-                                                  consent_at=timezone.now(), consent_version=CONSENT_VERSION,
-                                                  language=d.get("language") or request_language(request))
-                    SocialAccount.objects.create(user=user, provider="google", uid=ident.sub, email=ident.email,
-                                                 email_verified=True, name=ident.name, last_login_at=timezone.now())
+                user = _create_account(request, ident, d)
                 created = True
             except IntegrityError:                     # two first sign-ins at once: retry logs in
                 return Response({"error": "retry", "detail": "please try again"}, status=status.HTTP_409_CONFLICT)
-        audit(request, "auth.google_register" if created else "auth.google_login", "user", user.pk,
-              provider="google", **({"consent_version": CONSENT_VERSION} if created else {}))
+        audit(request, "auth.social_register" if created else "auth.social_login", "user", user.pk,
+              provider=provider, **({"consent_version": CONSENT_VERSION} if created else {}))
         request._request.audit_user = user
         User.objects.filter(pk=user.pk).update(last_login=timezone.now())
-        return Response({**tokens_for(user), "created": created},
+        return Response({**tokens_for(user), "created": created, "provider": provider},
                         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
-class GoogleLinkView(APIView):
-    """POST: link a Google account to the logged-in patient (then they can sign in with either).
-    DELETE: unlink it; only allowed when the account also has a phone and password, so nobody is locked out."""
-    throttle_classes = [AuthRateThrottle]
+class GoogleLoginView(SocialLoginView):
+    """Sign in with Google: the older route, the same as `POST /auth/social/google/`."""
+    legacy = True
 
-    @extend_schema(request=S.GoogleLinkIn, responses={200: S.ProfileOut, 400: ErrorOut, 401: ErrorOut,
-                                                       403: ErrorOut, 409: ErrorOut, 503: ErrorOut})
+    @extend_schema(request=S.GoogleLoginIn, responses={200: S.SocialTokensOut, 201: S.SocialTokensOut,
+                                                        400: ErrorOut, 401: ErrorOut, 403: ErrorOut, 503: ErrorOut},
+                   auth=[], operation_id="auth_google_create")
     def post(self, request):
-        if not google.enabled():
-            return _google_disabled()
+        return super().post(request, "google")
+
+
+def _login_methods_left(user, without_provider: str) -> bool:
+    p = PatientProfile.objects.filter(user=user).first()
+    if user.has_usable_password() and p and p.phone:
+        return True
+    return SocialLink.objects.filter(user=user).exclude(provider=without_provider).exists()
+
+
+class SocialLinkView(APIView):
+    """POST: link a Google, Facebook, Apple or Microsoft account to the logged-in patient (then they can sign in with
+    it too); send the same token fields as for sign-in. DELETE: unlink it; refused when it is the account's last way
+    to log in (no phone + password and no other linked provider), so nobody is locked out."""
+    throttle_classes = [AuthRateThrottle]
+    legacy = False
+
+    @extend_schema(request=S.SocialLinkIn, responses={200: S.ProfileOut, 400: ErrorOut, 401: ErrorOut, 403: ErrorOut,
+                                                       404: ErrorOut, 409: ErrorOut, 503: ErrorOut})
+    def post(self, request, provider: str = "google"):
+        if (bad := _check_provider(provider, self.legacy)) is not None:
+            return bad
+        name = social.NAMES[provider]
         if role_of(request.user) != "patient":
-            return Response({"error": "staff_password_only", "detail": "staff accounts cannot link Google"}, status=403)
-        data = S.GoogleLinkIn(data=request.data)
+            return Response({"error": "staff_password_only", "detail": f"staff accounts cannot link {name}"},
+                            status=403)
+        data = S.SocialLinkIn(data=request.data)
         data.is_valid(raise_exception=True)
-        try:
-            ident = google.verify(data.validated_data["id_token"])
-        except (google.GoogleTokenInvalid, google.GoogleUnavailable) as e:
-            audit(request, "auth.google_link_failed", "user", request.user.pk, reason=type(e).__name__)
-            return _google_error(e)
-        if not ident.email_verified:
-            return _unverified()
-        other = SocialAccount.objects.filter(provider="google", uid=ident.sub).first()
+        ident, error = _verify(request, provider, data.validated_data, self.legacy, "auth.social_link_failed",
+                               request.user.pk)
+        if error is not None:
+            return error
+        other = SocialLink.objects.filter(provider=provider, uid=ident.uid).first()
         if other is not None and other.user_id != request.user.pk:
-            audit(request, "auth.google_link_failed", "user", request.user.pk, reason="linked_elsewhere")
-            return Response({"error": "google_already_linked",
-                             "detail": "this Google account belongs to another Nazria account"}, status=409)
-        mine = SocialAccount.objects.filter(user=request.user, provider="google").first()
-        if mine is not None and mine.uid != ident.sub:
-            return Response({"error": "google_already_linked",
-                             "detail": "a different Google account is already linked; unlink it first"}, status=409)
+            audit(request, "auth.social_link_failed", "user", request.user.pk, provider=provider,
+                  reason="linked_elsewhere")
+            return _err("social_already_linked", f"this {name} account belongs to another Nazria account", 409,
+                        self.legacy)
+        mine = SocialLink.objects.filter(user=request.user, provider=provider).first()
+        if mine is not None and mine.uid != ident.uid:
+            return _err("social_already_linked", f"a different {name} account is already linked; unlink it first",
+                        409, self.legacy)
         if mine is None:
-            SocialAccount.objects.create(user=request.user, provider="google", uid=ident.sub, email=ident.email,
-                                         email_verified=True, name=ident.name)
-        if ident.email and not request.user.email:
+            try:
+                SocialLink.objects.create(user=request.user, provider=provider, uid=ident.uid, extra_data=_extra(ident))
+            except IntegrityError:
+                return Response({"error": "retry", "detail": "please try again"}, status=status.HTTP_409_CONFLICT)
+        if ident.email and ident.email_verified and not request.user.email:
             User.objects.filter(pk=request.user.pk).update(email=ident.email)
             request.user.email = ident.email
-        audit(request, "auth.google_link", "user", request.user.pk, provider="google")
+        audit(request, "auth.social_link", "user", request.user.pk, provider=provider)
         return Response(profile_of(request.user))
 
     @extend_schema(responses={200: S.ProfileOut, 404: ErrorOut, 409: ErrorOut})
-    def delete(self, request):
-        mine = SocialAccount.objects.filter(user=request.user, provider="google").first()
+    def delete(self, request, provider: str = "google"):
+        if provider not in social.PROVIDERS:
+            return Response({"error": "not_found", "detail": "unknown sign-in provider"}, status=404)
+        name = social.NAMES[provider]
+        mine = SocialLink.objects.filter(user=request.user, provider=provider).first()
         if mine is None:
-            return Response({"error": "not_found", "detail": "no Google account is linked"}, status=404)
-        p = PatientProfile.objects.filter(user=request.user).first()
-        if not request.user.has_usable_password() or not (p and p.phone):
+            return Response({"error": "not_found", "detail": f"no {name} account is linked"}, status=404)
+        if not _login_methods_left(request.user, provider):
             return Response({"error": "last_login_method",
-                             "detail": "add a phone number and a password before unlinking Google"}, status=409)
+                             "detail": f"add a phone number and a password, or link another account, before "
+                                       f"unlinking {name}"}, status=409)
         mine.delete()
-        audit(request, "auth.google_unlink", "user", request.user.pk, provider="google")
+        audit(request, "auth.social_unlink", "user", request.user.pk, provider=provider)
         return Response(profile_of(request.user))
+
+
+class GoogleLinkView(SocialLinkView):
+    """The older route, the same as `/me/social/google/`."""
+    legacy = True
+
+    @extend_schema(request=S.GoogleLinkIn, responses={200: S.ProfileOut, 400: ErrorOut, 401: ErrorOut,
+                                                       403: ErrorOut, 409: ErrorOut, 503: ErrorOut},
+                   operation_id="me_google_create")
+    def post(self, request):
+        return super().post(request, "google")
+
+    @extend_schema(responses={200: S.ProfileOut, 404: ErrorOut, 409: ErrorOut}, operation_id="me_google_destroy")
+    def delete(self, request):
+        return super().delete(request, "google")
