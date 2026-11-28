@@ -392,3 +392,30 @@ def test_explanation_in_english(api, kb, monkeypatch):
     assert "English" in fp.calls[0]["messages"][0]["content"]                     # the model was asked for English
     ur = api.post(f"/api/v1/consultations/{r.data['id']}/explanation/").data       # Urdu is a separate explanation
     assert len(fp.calls) == 2 and ur["language"] == "ur"
+
+
+# ---------------------------------------------------------------- behind a reverse proxy
+@pytest.mark.parametrize("limit,left", [(128 * 1024 * 1024, b""), (0, b"-")])
+def test_an_upload_refused_before_it_is_read_is_still_drained(anon, settings, limit, left):
+    """A pulse video sent without a valid login gets its 401, and the request body is read to the end, so gunicorn
+    closes the connection cleanly and Apache passes the 401 on (instead of a 502)."""
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    settings.NAZRIA_DRAIN_MAX_BYTES = limit          # 0: draining off, to show the test notices it
+    seen = {}
+
+    from nazria_api import drain
+    real = drain.DrainUnreadBodyMiddleware.__call__
+
+    def spy(self, request):
+        response = real(self, request)
+        seen["left"] = request._stream.read(1)
+        seen["status"] = response.status_code
+        return response
+    drain.DrainUnreadBodyMiddleware.__call__ = spy
+    try:
+        video = SimpleUploadedFile("pulse.mp4", b"\0" * 300_000, content_type="video/mp4")
+        r = anon.post("/api/v1/pulse/analyses/", {"video": video, "method": "finger"}, format="multipart")
+    finally:
+        drain.DrainUnreadBodyMiddleware.__call__ = real
+    assert r.status_code == 401 and seen["status"] == 401
+    assert seen["left"] == left

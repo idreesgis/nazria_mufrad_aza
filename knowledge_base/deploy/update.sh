@@ -14,5 +14,6 @@ run "$VENV/bin/python manage.py seed_questionnaire"
 run "$VENV/bin/python manage.py collectstatic --noinput --verbosity 0"
 run "$VENV/bin/python manage.py check --deploy --fail-level ERROR"
 systemctl restart nazria-api
-sleep 2
-curl -fsS http://localhost/api/v1/health/ && echo
+sleep 3
+# straight to gunicorn's socket: the same check behind nginx (port 80) or Apache (port 95)
+curl -fsS --unix-socket /run/nazria/gunicorn.sock http://localhost/api/v1/health/ && echo
