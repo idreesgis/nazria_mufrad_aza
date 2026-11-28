@@ -91,6 +91,11 @@ _db_url = env("NAZRIA_DATABASE_URL")
 if not _db_url:
     raise ImproperlyConfigured("set NAZRIA_DATABASE_URL (its value is never printed)")
 DATABASES = {"default": database_from_url(_db_url, NAZRIA_API_DB_SCHEMA, int(env("NAZRIA_DB_CONN_MAX_AGE") or 60))}
+# PostgreSQL 12 or 13 (Django 5.2 needs 14+): allowed only when switched on, for a shared server that cannot be
+# upgraded yet. Those versions get no security fixes; see nazria_api/db_pg12/base.py.
+NAZRIA_ALLOW_POSTGRES_12 = env_flag("NAZRIA_ALLOW_POSTGRES_12", False)
+if NAZRIA_ALLOW_POSTGRES_12:
+    DATABASES["default"]["ENGINE"] = "nazria_api.db_pg12"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_PASSWORD_VALIDATORS = [
