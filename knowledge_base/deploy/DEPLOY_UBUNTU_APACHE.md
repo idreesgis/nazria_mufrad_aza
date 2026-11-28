@@ -77,6 +77,14 @@ again.
 
 Settings can be changed when running it, for example: `sudo PORT=8095 APP_DIR=/srv/nazria bash deploy_apache.sh`.
 
+**Port 95 and web browsers:**
+- Chrome, Edge and Firefox refuse to open port 95 (and some other old port numbers) and show `ERR_UNSAFE_PORT`.
+- The Android app is not affected.
+- To open the admin pages in a browser, move the API to another port once: `sudo PORT=8095 bash deploy_apache.sh`.
+  The script remembers the port (`NAZRIA_APACHE_PORT`), so later runs need no `PORT=` and stay on it. It also
+  updates `DJANGO_CSRF_TRUSTED_ORIGINS`, which the admin login form needs, and frees port 95.
+- Open the new port in your hosting provider's firewall, and change the app's server address to match.
+
 The sections below are the same steps by hand, with the reasons for each.
 
 ---

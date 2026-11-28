@@ -20,10 +20,11 @@ esac
 
 # ------------------------------------------------------------------------------------------------ settings
 # Change these here, or set them when running:  sudo PORT=8095 bash deploy_apache.sh
+# The port is remembered in the settings (NAZRIA_APACHE_PORT): later runs keep it without PORT=…
 APP_DIR="${APP_DIR:-/home/python-www/nazria_mufrad_aza}"          # the git checkout
 VENV="${VENV:-$APP_DIR/venv}"                                       # the Python virtual environment
 APACHE_SITES="${APACHE_SITES:-/etc/apache2/sites-available}"
-PORT="${PORT:-95}"
+PORT_GIVEN="${PORT:-}"
 REPO_URL="${REPO_URL:-git@github.com:idreesgis/nazria_mufrad_aza.git}"
 BRANCH="${BRANCH:-main}"
 RUN_USER="${RUN_USER:-nazria}"                                     # system user that runs the API
@@ -42,6 +43,12 @@ declare -A UV_SHA256=(
     [aarch64]="4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31"
 )
 DJANGO_DIR="$APP_DIR/knowledge_base"
+PORT_SAVED="$(sed -n 's/^NAZRIA_APACHE_PORT=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$ENV_FILE" 2>/dev/null | tail -1 || true)"
+PORT="${PORT_GIVEN:-${PORT_SAVED:-95}}"
+# ports that Chrome, Edge and Firefox refuse to open (ERR_UNSAFE_PORT); apps such as the Android app are not affected
+BROWSER_BLOCKED_PORTS=" 1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 95 101 102 103 104 109 110 111 113 \
+115 117 119 123 135 137 139 143 161 179 389 427 465 512 513 514 515 526 530 531 532 540 548 554 556 563 587 601 636 989 \
+990 993 995 1719 1720 1723 2049 3659 4045 4190 5060 5061 6000 6566 6665 6666 6667 6668 6669 6679 6697 10080 "
 
 # ------------------------------------------------------------------------------------------------ helpers
 STEP="start"
@@ -55,10 +62,31 @@ as_app() { sudo -u "$RUN_USER" -H "$@"; }
 manage() { (cd "$DJANGO_DIR" && sudo -u "$RUN_USER" -H env NAZRIA_ENV_FILE="$ENV_FILE" PYTHONDONTWRITEBYTECODE=1 \
              "$VENV/bin/python" manage.py "$@"); }
 interactive() { [[ -t 0 ]]; }
+set_env_value() {    # $1 = name, $2 = value: replaces (or adds) one line of the settings file, all at once
+    NZ_OUT="$ENV_FILE" NZ_KEY="$1" NZ_VAL="$2" "$VENV/bin/python" -c '
+import os, re, tempfile
+e = os.environ
+text = open(e["NZ_OUT"], encoding="utf-8").read()
+line = e["NZ_KEY"] + "=" + e["NZ_VAL"]
+text, n = re.subn("(?m)^" + re.escape(e["NZ_KEY"]) + "=.*$", lambda m: line, text)
+if not n:
+    text = text.rstrip("\n") + "\n" + line + "\n"
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(e["NZ_OUT"]), prefix=".nazria.env.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    f.write(text)
+os.chmod(tmp, 0o640)
+os.replace(tmp, e["NZ_OUT"])
+'
+    chown root:"$RUN_USER" "$ENV_FILE"; chmod 640 "$ENV_FILE"
+}
 
 [[ $EUID -eq 0 ]] || die "run it with sudo:  sudo bash $0"
 command -v apt-get >/dev/null || die "this script is for Ubuntu (apt-get not found)"
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT must be a number"
+if [[ "$BROWSER_BLOCKED_PORTS" == *" $PORT "* ]]; then
+    warn "port $PORT is refused by web browsers (ERR_UNSAFE_PORT): the Android app works, but the admin pages cannot"
+    warn "be opened in a browser. For browser access choose another port, e.g.:  sudo PORT=8095 bash $0"
+fi
 
 # ------------------------------------------------------------------------------------------------ 1. packages
 step "1/11 Software already on the server (git, Apache, Python 3.11+)"
@@ -266,6 +294,24 @@ else
     info "kept as it is (to enter the database again: sudo bash $0 --set-database)"
 fi
 grep -qE '^NAZRIA_DATABASE_URL=(postgres|postgis)' "$ENV_FILE" || die "NAZRIA_DATABASE_URL is not set in $ENV_FILE"
+# the Apache port is remembered, and the admin login (CSRF) must allow this server's address with that port
+if [[ "$PORT_SAVED" != "$PORT" ]]; then
+    set_env_value NAZRIA_APACHE_PORT "$PORT"
+    [[ -z "$PORT_SAVED" ]] || info "Apache port changed from $PORT_SAVED to $PORT (remembered for later runs)"
+fi
+SITE_HOST="$(sed -n 's/^DJANGO_ALLOWED_HOSTS=\([^,]*\).*/\1/p' "$ENV_FILE" | tail -1)"
+if [[ -n "$SITE_HOST" ]]; then
+    ORIGIN="http://$SITE_HOST"; [[ "$PORT" == 80 ]] || ORIGIN="$ORIGIN:$PORT"
+    OLD_ORIGINS="$(sed -n 's/^DJANGO_CSRF_TRUSTED_ORIGINS=//p' "$ENV_FILE" | tail -1)"
+    if [[ ",$OLD_ORIGINS," != *",$ORIGIN,"* ]]; then
+        # drop this server's plain-HTTP origin with another port, keep every other origin (https, domains, ...)
+        NEW_ORIGINS="$(printf '%s\n' "$OLD_ORIGINS" | tr ',' '\n' \
+            | awk -v h="http://$SITE_HOST" -v o="$ORIGIN" 'NF && $0 != h && index($0, h ":") != 1 { print } END { print o }' \
+            | paste -sd, -)"
+        set_env_value DJANGO_CSRF_TRUSTED_ORIGINS "$NEW_ORIGINS"
+        info "admin login allowed from $ORIGIN (DJANGO_CSRF_TRUSTED_ORIGINS)"
+    fi
+fi
 
 # ------------------------------------------------------------------------------------------------ 6. database
 step "6/11 Database connection"
@@ -328,23 +374,6 @@ except Exception as e:                               # noqa: BLE001 - explain, t
 print(f"    {where}")
 PYEOF
 )
-}
-set_env_value() {    # $1 = name, $2 = value: replaces (or adds) one line of the settings file, all at once
-    NZ_OUT="$ENV_FILE" NZ_KEY="$1" NZ_VAL="$2" "$PY" -c '
-import os, re, tempfile
-e = os.environ
-text = open(e["NZ_OUT"], encoding="utf-8").read()
-line = e["NZ_KEY"] + "=" + e["NZ_VAL"]
-text, n = re.subn("(?m)^" + re.escape(e["NZ_KEY"]) + "=.*$", lambda m: line, text)
-if not n:
-    text = text.rstrip("\n") + "\n" + line + "\n"
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(e["NZ_OUT"]), prefix=".nazria.env.")
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    f.write(text)
-os.chmod(tmp, 0o640)
-os.replace(tmp, e["NZ_OUT"])
-'
-    chown root:"$RUN_USER" "$ENV_FILE"; chmod 640 "$ENV_FILE"
 }
 DB_RC=0; db_check || DB_RC=$?
 if [[ $DB_RC -eq 4 ]]; then
@@ -492,6 +521,9 @@ info "Apache restarted"
 step "10/11 Firewall"
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow "$PORT/tcp" >/dev/null && info "ufw: port $PORT/tcp allowed"
+    if [[ -n "$PORT_SAVED" && "$PORT_SAVED" != "$PORT" ]]; then
+        info "the old port $PORT_SAVED is not used any more: close it with  sudo ufw delete allow $PORT_SAVED/tcp"
+    fi
 else
     info "ufw is not active: nothing to change here"
 fi
