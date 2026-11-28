@@ -8,14 +8,8 @@ info:
 paths:
   /api/v1/auth/google/:
     post:
-      operationId: v1_auth_google_create
-      description: |-
-        Sign in with Google. Send the ID token from Credential Manager / Google Sign-In.
-
-        * A known Google account logs in (`200`, `created: false`).
-        * An unknown one creates a patient account (`201`, `created: true`), which needs `consent: true`; without it the
-          answer is `400 consent_required`: show the disclaimer and send the same request with `consent: true`.
-        * Staff accounts cannot use Google: they log in with phone + password.
+      operationId: auth_google_create
+      description: 'Sign in with Google: the older route, the same as `POST /auth/social/google/`.'
       tags:
       - v1
       requestBody:
@@ -23,19 +17,18 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/GoogleLoginInRequest'
-        required: true
       responses:
         '200':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GoogleTokensOut'
+                $ref: '#/components/schemas/SocialTokensOut'
           description: ''
         '201':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GoogleTokensOut'
+                $ref: '#/components/schemas/SocialTokensOut'
           description: ''
         '400':
           content:
@@ -196,6 +189,90 @@ paths:
         schema:
           type: string
         description: App key (python manage.py create_api_client NAME)
+  /api/v1/auth/social/{provider}/:
+    post:
+      operationId: v1_auth_social_create
+      description: |-
+        Sign in with Google, Facebook, Apple or Microsoft (`provider` in the URL).
+
+        Send what the provider's SDK gave the app: `id_token` (Google, Apple + `nonce`, Microsoft) or `access_token`
+        (Facebook). GET /health/ lists the providers that are on (`social_providers`) and their public IDs.
+
+        * A known provider account logs in (`200`, `created: false`).
+        * An unknown one creates a patient account (`201`, `created: true`), which needs the patient's consent: the first
+          answer is `400 consent_required` with a `signup_token`. Show the disclaimer, then send `signup_token` (not the
+          provider token again) with `consent: true`.
+        * Accounts are never matched by e-mail address. To add a provider to an existing account, log in and use
+          `POST /me/social/<provider>/`.
+        * Staff accounts cannot use social sign-in: they log in with phone + password.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: provider
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialLoginInRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialTokensOut'
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialTokensOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
   /api/v1/consultations/:
     get:
       operationId: v1_consultations_list
@@ -544,10 +621,8 @@ paths:
           description: ''
   /api/v1/me/google/:
     post:
-      operationId: v1_me_google_create
-      description: |-
-        POST: link a Google account to the logged-in patient (then they can sign in with either).
-        DELETE: unlink it; only allowed when the account also has a phone and password, so nobody is locked out.
+      operationId: me_google_create
+      description: The older route, the same as `/me/social/google/`.
       tags:
       - v1
       requestBody:
@@ -555,7 +630,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/GoogleLinkInRequest'
-        required: true
       security:
       - jwtAuth: []
       responses:
@@ -603,10 +677,8 @@ paths:
           type: string
         description: App key (python manage.py create_api_client NAME)
     delete:
-      operationId: v1_me_google_destroy
-      description: |-
-        POST: link a Google account to the logged-in patient (then they can sign in with either).
-        DELETE: unlink it; only allowed when the account also has a phone and password, so nobody is locked out.
+      operationId: me_google_destroy
+      description: The older route, the same as `/me/social/google/`.
       tags:
       - v1
       security:
@@ -668,6 +740,118 @@ paths:
         schema:
           type: string
         description: App key (python manage.py create_api_client NAME)
+  /api/v1/me/social/{provider}/:
+    post:
+      operationId: v1_me_social_create
+      description: |-
+        POST: link a Google, Facebook, Apple or Microsoft account to the logged-in patient (then they can sign in with
+        it too); send the same token fields as for sign-in. DELETE: unlink it; refused when it is the account's last way
+        to log in (no phone + password and no other linked provider), so nobody is locked out.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: provider
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialLinkInRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+    delete:
+      operationId: v1_me_social_destroy
+      description: |-
+        POST: link a Google, Facebook, Apple or Microsoft account to the logged-in patient (then they can sign in with
+        it too); send the same token fields as for sign-in. DELETE: unlink it; refused when it is the account's last way
+        to log in (no phone + password and no other linked provider), so nobody is locked out.
+      parameters:
+      - in: header
+        name: X-Api-Key
+        required: true
+        schema:
+          type: string
+        description: App key (python manage.py create_api_client NAME)
+      - in: path
+        name: provider
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileOut'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorOut'
+          description: ''
   /api/v1/patients/:
     get:
       operationId: v1_patients_list
@@ -1925,18 +2109,54 @@ components:
           type: string
           writeOnly: true
           minLength: 1
+          description: 'google: id_token (Credential Manager, serverClientId = the
+            server''s Web client ID) · facebook: access_token (Facebook Login SDK)
+            · apple: id_token + nonce · microsoft: id_token (AppAuth, authorization
+            code + PKCE)'
+          maxLength: 8192
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Facebook only: the access token from the Facebook Login SDK'
           maxLength: 4096
-      required:
-      - id_token
+        nonce:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Apple only: the raw nonce; its SHA-256 (hex) was sent to Apple'
+          maxLength: 256
     GoogleLoginInRequest:
       type: object
+      description: The older Google-only route (same as /auth/social/google/).
       properties:
         id_token:
           type: string
           writeOnly: true
           minLength: 1
-          description: Google ID token from Credential Manager / Google Sign-In (serverClientId
-            = the server's Web client ID)
+          description: 'google: id_token (Credential Manager, serverClientId = the
+            server''s Web client ID) · facebook: access_token (Facebook Login SDK)
+            · apple: id_token + nonce · microsoft: id_token (AppAuth, authorization
+            code + PKCE)'
+          maxLength: 8192
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Facebook only: the access token from the Facebook Login SDK'
+          maxLength: 4096
+        nonce:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Apple only: the raw nonce; its SHA-256 (hex) was sent to Apple'
+          maxLength: 256
+        signup_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'From a 400 consent_required answer: send it back (instead
+            of the provider token) with consent: true to create the account'
           maxLength: 4096
         consent:
           type: boolean
@@ -1944,7 +2164,7 @@ components:
           description: Needed (true) only when a new account is created
         full_name:
           type: string
-          description: 'New accounts: defaults to the Google name'
+          description: 'New accounts: defaults to the name from the provider'
           maxLength: 150
         gender:
           oneOf:
@@ -1964,27 +2184,6 @@ components:
             * `ur` - ur
             * `en` - en
             * `ar` - ar
-      required:
-      - id_token
-    GoogleTokensOut:
-      type: object
-      properties:
-        access:
-          type: string
-          description: 'Send as Authorization: Bearer <access> (valid 30 minutes)'
-        refresh:
-          type: string
-          description: Exchange at /auth/refresh/ for new tokens (valid 30 days)
-        user:
-          $ref: '#/components/schemas/ProfileOut'
-        created:
-          type: boolean
-          description: True when this sign-in created a new account
-      required:
-      - access
-      - created
-      - refresh
-      - user
     HazardOut:
       type: object
       properties:
@@ -2007,6 +2206,20 @@ components:
         google_login_enabled:
           type: boolean
           description: Show the "Sign in with Google" button
+        social_providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialProviderEnum'
+          description: The social sign-in buttons to show, in this order
+        social_config:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: {}
+          description: 'Public IDs to start each sign-in, e.g. {"google": {"client_id":
+            "…"}, "facebook": {"app_id": "…"}, "apple": {"client_id": "…", "start_url":
+            "https://…/auth/apple/start/"}, "microsoft": {"client_id": "…", "tenant":
+            "common"}}. Never secrets.'
         api_version:
           type: integer
       required:
@@ -2014,6 +2227,8 @@ components:
       - database
       - explanation_enabled
       - google_login_enabled
+      - social_config
+      - social_providers
       - status
     IntakeFieldOut:
       type: object
@@ -2309,7 +2524,7 @@ components:
         old_password:
           type: string
           writeOnly: true
-          description: Required, except for a Google account that has no password
+          description: Required, except for a social-login account that has no password
             yet
           maxLength: 128
         new_password:
@@ -2385,7 +2600,8 @@ components:
         phone:
           type: string
           minLength: 1
-          description: Only accepted while the account has no phone yet (Google accounts)
+          description: Only accepted while the account has no phone yet (social-login
+            accounts)
           maxLength: 30
         language:
           allOf:
@@ -2632,10 +2848,11 @@ components:
         phone:
           type: string
           nullable: true
-          description: null for a Google account until the patient adds one
+          description: null for a social-login account until the patient adds one
         email:
           type: string
-          description: From Google, if linked
+          description: From the linked provider (Google, Facebook, Apple, Microsoft),
+            if any
         full_name:
           type: string
         gender:
@@ -2654,14 +2871,14 @@ components:
           format: date-time
         has_password:
           type: boolean
-          description: False for a Google-only account (phone login not possible)
+          description: False for a social-login-only account (phone login not possible)
         language:
           $ref: '#/components/schemas/LanguageEnum'
         linked_providers:
           type: array
           items:
             type: string
-          description: e.g. ["google"]
+          description: Any of google, facebook, apple, microsoft
       required:
       - birth_year
       - consent_at
@@ -3070,6 +3287,121 @@ components:
       required:
       - equals
       - question_id
+    SocialLinkInRequest:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'google: id_token (Credential Manager, serverClientId = the
+            server''s Web client ID) · facebook: access_token (Facebook Login SDK)
+            · apple: id_token + nonce · microsoft: id_token (AppAuth, authorization
+            code + PKCE)'
+          maxLength: 8192
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Facebook only: the access token from the Facebook Login SDK'
+          maxLength: 4096
+        nonce:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Apple only: the raw nonce; its SHA-256 (hex) was sent to Apple'
+          maxLength: 256
+    SocialLoginInRequest:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'google: id_token (Credential Manager, serverClientId = the
+            server''s Web client ID) · facebook: access_token (Facebook Login SDK)
+            · apple: id_token + nonce · microsoft: id_token (AppAuth, authorization
+            code + PKCE)'
+          maxLength: 8192
+        access_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Facebook only: the access token from the Facebook Login SDK'
+          maxLength: 4096
+        nonce:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'Apple only: the raw nonce; its SHA-256 (hex) was sent to Apple'
+          maxLength: 256
+        signup_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          description: 'From a 400 consent_required answer: send it back (instead
+            of the provider token) with consent: true to create the account'
+          maxLength: 4096
+        consent:
+          type: boolean
+          default: false
+          description: Needed (true) only when a new account is created
+        full_name:
+          type: string
+          description: 'New accounts: defaults to the name from the provider'
+          maxLength: 150
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/GenderEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        birth_year:
+          type: integer
+          maximum: 2100
+          minimum: 1900
+          nullable: true
+        language:
+          allOf:
+          - $ref: '#/components/schemas/LanguageEnum'
+          description: |-
+            Language of the app's texts: ur | en | ar
+
+            * `ur` - ur
+            * `en` - en
+            * `ar` - ar
+    SocialProviderEnum:
+      enum:
+      - google
+      - facebook
+      - apple
+      - microsoft
+      type: string
+      description: |-
+        * `google` - google
+        * `facebook` - facebook
+        * `apple` - apple
+        * `microsoft` - microsoft
+    SocialTokensOut:
+      type: object
+      properties:
+        access:
+          type: string
+          description: 'Send as Authorization: Bearer <access> (valid 30 minutes)'
+        refresh:
+          type: string
+          description: Exchange at /auth/refresh/ for new tokens (valid 30 days)
+        user:
+          $ref: '#/components/schemas/ProfileOut'
+        created:
+          type: boolean
+          description: True when this sign-in created a new account
+        provider:
+          $ref: '#/components/schemas/SocialProviderEnum'
+      required:
+      - access
+      - created
+      - provider
+      - refresh
+      - user
     StaffPatientRowOut:
       type: object
       properties:

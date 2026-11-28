@@ -46,7 +46,7 @@ Set at least these values:
 | `DJANGO_ALLOWED_HOSTS` | Your public IP, then `,localhost,127.0.0.1` |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | `http://<your public IP>` |
 | `NAZRIA_DATABASE_URL` | The same database as the knowledge base |
-| `NAZRIA_GOOGLE_CLIENT_IDS` | Optional: the Google "Web application" OAuth client ID, for Sign in with Google (see `docs/API.md`). The server must reach `www.googleapis.com` over HTTPS to fetch Google's public keys. |
+| `NAZRIA_GOOGLE_CLIENT_IDS`, `NAZRIA_FACEBOOK_APP_ID`, `NAZRIA_FACEBOOK_APP_SECRET`, `NAZRIA_APPLE_CLIENT_IDS`, `NAZRIA_MICROSOFT_CLIENT_ID`, `NAZRIA_MICROSOFT_TENANT`, `NAZRIA_PUBLIC_URL` | Optional: social sign-in. Each provider is off until its IDs are set. See "Provider setup" in `docs/API.md`. The Facebook app secret is the only secret here. Apple also needs `NAZRIA_PUBLIC_URL` to be an `https://` address. |
 
 The database must accept connections from this server, so add the server's IP to the database firewall or
 allowlist.
