@@ -40,6 +40,14 @@ Its paths are set at the top: the project in `/home/python-www/nazria_mufrad_aza
 sudo bash deploy_apache.sh
 ```
 
+**Software already on the server:**
+- git, Apache and Python are used as they are: the script installs only what is missing, and upgrades nothing.
+- Python must be 3.11 or newer. The newest installed version is used. Only when there is none (Ubuntu 22.04's own
+  Python is 3.10) does it add Python 3.12 next to the system Python.
+- PostgreSQL is not installed or changed by the script. It only connects with the URL you give. If the database
+  runs on this same server, the URL's host is `127.0.0.1` or `localhost`. The user in the URL must be allowed to
+  connect in PostgreSQL's own settings (`pg_hba.conf`); the script never edits them.
+
 **First run:**
 - It asks for the server's public IP and the database URL (the URL is typed hidden, and never printed or logged).
 - It generates `DJANGO_SECRET_KEY` and writes `/etc/nazria/nazria.env` (mode 640).

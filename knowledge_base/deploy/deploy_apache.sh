@@ -43,27 +43,42 @@ command -v apt-get >/dev/null || die "this script is for Ubuntu (apt-get not fou
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT must be a number"
 
 # ------------------------------------------------------------------------------------------------ 1. packages
-step "1/11 System packages (git, Apache, Python 3.11+)"
+step "1/11 Software already on the server (git, Apache, Python 3.11+)"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq git curl ca-certificates openssh-client apache2 >/dev/null
+APT_UPDATED=""
+apt_install() {      # installs only what is missing; nothing already installed is upgraded or changed
+    [[ -n "$APT_UPDATED" ]] || { apt-get update -qq; APT_UPDATED=1; }
+    info "installing: $*"
+    apt-get install -y -qq --no-upgrade "$@" >/dev/null
+}
+MISSING=()
+command -v git >/dev/null         || MISSING+=(git)
+command -v curl >/dev/null        || MISSING+=(curl)
+command -v ssh-keygen >/dev/null  || MISSING+=(openssh-client)
+command -v apache2ctl >/dev/null  || MISSING+=(apache2)
+[[ -e /etc/ssl/certs/ca-certificates.crt ]] || MISSING+=(ca-certificates)
+if [[ ${#MISSING[@]} -gt 0 ]]; then apt_install "${MISSING[@]}"; fi
+info "git $(git --version | awk '{print $3}') · $(apache2ctl -v 2>/dev/null | sed -n 's/^Server version: //p')"
+
+# the project needs Python 3.11 or newer (the Gemini library, google-genai); use the newest one installed
 PY=""
-for p in python3.12 python3.13 python3.11 python3; do
+for p in python3.13 python3.12 python3.11 python3; do
     if command -v "$p" >/dev/null && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
         PY="$(command -v "$p")"; break
     fi
 done
 if [[ -z "$PY" ]]; then
-    # Ubuntu 22.04 has Python 3.10; the Gemini library (google-genai) needs 3.11+
-    info "installing Python 3.12 from the deadsnakes PPA (next to the system Python, which stays as it is)"
-    apt-get install -y -qq software-properties-common >/dev/null
+    # e.g. Ubuntu 22.04's own Python 3.10: add 3.12 next to it (the system Python stays as it is)
+    warn "no Python 3.11+ found ($(python3 --version 2>&1)); installing Python 3.12 from the deadsnakes PPA"
+    command -v add-apt-repository >/dev/null || apt_install software-properties-common
     add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
-    apt-get update -qq
-    apt-get install -y -qq python3.12 python3.12-venv python3.12-dev >/dev/null
+    APT_UPDATED=""
+    apt_install python3.12 python3.12-venv python3.12-dev
     PY="$(command -v python3.12)"
 fi
 PYV="$("$PY" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-apt-get install -y -qq "python${PYV}-venv" >/dev/null 2>&1 || true      # ensurepip for that version
+# "python -m venv" needs ensurepip, which Ubuntu ships separately (pythonX.Y-venv)
+if ! "$PY" -c 'import ensurepip, venv' >/dev/null 2>&1; then apt_install "python${PYV}-venv"; fi
 info "Python: $PY ($("$PY" --version 2>&1))"
 
 # ------------------------------------------------------------------------------------------------ 2. user, folders
