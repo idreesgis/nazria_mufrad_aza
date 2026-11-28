@@ -205,7 +205,7 @@ python manage.py runserver 0.0.0.0:8000
 
 **Server:** Ubuntu with gunicorn and systemd, no Docker, behind either web server:
 - nginx on port 80: [`deploy/DEPLOY_UBUNTU.md`](deploy/DEPLOY_UBUNTU.md);
-- Apache on port 95 (Ubuntu 22.04): [`deploy/DEPLOY_UBUNTU_APACHE.md`](deploy/DEPLOY_UBUNTU_APACHE.md).
+- Apache on port 95 (Ubuntu 20.04, 22.04 or 24.04; adds Python 3.12 if the server's is older): [`deploy/DEPLOY_UBUNTU_APACHE.md`](deploy/DEPLOY_UBUNTU_APACHE.md).
 
 **Tests:**
 - `pytest` runs every test, the API ones with SQLite and an in-memory knowledge base, so no PostgreSQL is needed.

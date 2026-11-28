@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command to deploy (first time) or update (every later time) the Nazria API on Ubuntu 22.04 / 24.04:
+# One command to deploy (first time) or update (every later time) the Nazria API on Ubuntu 20.04 / 22.04 / 24.04:
 #   git -> Python venv -> requirements -> configuration -> database -> gunicorn (systemd) -> Apache on port 95
 #
 #   sudo bash deploy_apache.sh
@@ -23,6 +23,15 @@ DATA_DIR="${DATA_DIR:-/var/lib/nazria}"                             # pulse vide
 SERVICE="${SERVICE:-nazria-api}"
 SITE="${SITE:-nazria}"
 SOCKET_DIR="/run/nazria"
+# When the server has no Python 3.11+ (Ubuntu 20.04: 3.8, 22.04: 3.10), the project gets its own Python 3.12 here,
+# installed with uv (pinned version, checksum verified). The system Python is never changed.
+TOOLS_DIR="${TOOLS_DIR:-/opt/nazria-python}"
+PRIVATE_PYTHON="${PRIVATE_PYTHON:-3.12}"
+UV_VERSION="0.11.32"
+declare -A UV_SHA256=(
+    [x86_64]="aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967"
+    [aarch64]="4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31"
+)
 DJANGO_DIR="$APP_DIR/knowledge_base"
 
 # ------------------------------------------------------------------------------------------------ helpers
@@ -43,27 +52,57 @@ command -v apt-get >/dev/null || die "this script is for Ubuntu (apt-get not fou
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT must be a number"
 
 # ------------------------------------------------------------------------------------------------ 1. packages
-step "1/11 System packages (git, Apache, Python 3.11+)"
+step "1/11 Software already on the server (git, Apache, Python 3.11+)"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq git curl ca-certificates openssh-client apache2 >/dev/null
+APT_UPDATED=""
+apt_install() {      # installs only what is missing; nothing already installed is upgraded or changed
+    [[ -n "$APT_UPDATED" ]] || { apt-get update -qq; APT_UPDATED=1; }
+    info "installing: $*"
+    apt-get install -y -qq --no-upgrade "$@" >/dev/null
+}
+MISSING=()
+command -v git >/dev/null         || MISSING+=(git)
+command -v curl >/dev/null        || MISSING+=(curl)
+command -v ssh-keygen >/dev/null  || MISSING+=(openssh-client)
+command -v apache2ctl >/dev/null  || MISSING+=(apache2)
+[[ -e /etc/ssl/certs/ca-certificates.crt ]] || MISSING+=(ca-certificates)
+if [[ ${#MISSING[@]} -gt 0 ]]; then apt_install "${MISSING[@]}"; fi
+info "git $(git --version | awk '{print $3}') · $(apache2ctl -v 2>/dev/null | sed -n 's/^Server version: //p')"
+
+# the project needs Python 3.11 or newer (the Gemini library, google-genai); use the newest one installed
 PY=""
-for p in python3.12 python3.13 python3.11 python3; do
+for p in python3.13 python3.12 python3.11 python3; do
     if command -v "$p" >/dev/null && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
         PY="$(command -v "$p")"; break
     fi
 done
 if [[ -z "$PY" ]]; then
-    # Ubuntu 22.04 has Python 3.10; the Gemini library (google-genai) needs 3.11+
-    info "installing Python 3.12 from the deadsnakes PPA (next to the system Python, which stays as it is)"
-    apt-get install -y -qq software-properties-common >/dev/null
-    add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
-    apt-get update -qq
-    apt-get install -y -qq python3.12 python3.12-venv python3.12-dev >/dev/null
-    PY="$(command -v python3.12)"
+    # e.g. Ubuntu 20.04 (3.8) or 22.04 (3.10): a private Python for this project only
+    warn "the system Python ($(python3 --version 2>&1)) is too old for the project (it needs 3.11 or newer)"
+    info "installing a private Python $PRIVATE_PYTHON for this project in $TOOLS_DIR (the system Python stays as it is)"
+    UV="$TOOLS_DIR/bin/uv"
+    if [[ ! -x "$UV" ]] || [[ "$("$UV" --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
+        ARCH="$(uname -m)"
+        [[ -n "${UV_SHA256[$ARCH]:-}" ]] || die "no uv build known for this processor ($ARCH)"
+        TMP_UV="$(mktemp -d)"
+        curl -fsSL -o "$TMP_UV/uv.tar.gz" \
+            "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$ARCH-unknown-linux-gnu.tar.gz"
+        echo "${UV_SHA256[$ARCH]}  $TMP_UV/uv.tar.gz" | sha256sum -c --quiet - \
+            || { rm -rf "$TMP_UV"; die "the uv download does not match its published checksum; not installed"; }
+        tar -xzf "$TMP_UV/uv.tar.gz" -C "$TMP_UV"
+        install -d -m 755 "$TOOLS_DIR/bin"
+        install -m 755 "$TMP_UV/uv-$ARCH-unknown-linux-gnu/uv" "$UV"
+        rm -rf "$TMP_UV"
+    fi
+    export UV_PYTHON_INSTALL_DIR="$TOOLS_DIR/python" UV_CACHE_DIR="$TOOLS_DIR/cache" UV_NO_CONFIG=1
+    "$UV" python install --quiet "$PRIVATE_PYTHON"
+    PY="$("$UV" python find --managed-python "$PRIVATE_PYTHON")"
+    chmod -R a+rX "$TOOLS_DIR/python"            # the service user runs it (read-only)
+    [[ -x "$PY" ]] || die "the private Python was not installed"
 fi
 PYV="$("$PY" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-apt-get install -y -qq "python${PYV}-venv" >/dev/null 2>&1 || true      # ensurepip for that version
+# "python -m venv" needs ensurepip, which Ubuntu ships separately (pythonX.Y-venv); the private Python has it
+if ! "$PY" -c 'import ensurepip, venv' >/dev/null 2>&1; then apt_install "python${PYV}-venv"; fi
 info "Python: $PY ($("$PY" --version 2>&1))"
 
 # ------------------------------------------------------------------------------------------------ 2. user, folders
