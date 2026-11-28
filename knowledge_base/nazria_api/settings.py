@@ -39,6 +39,13 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
+    "allauth",                                         # social sign-in: providers, token checks, account links
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
+    "allauth.socialaccount.providers.facebook",
+    "allauth.socialaccount.providers.apple",
+    "allauth.socialaccount.providers.microsoft",      # with accounts.social_providers.MicrosoftTokenProvider
     "accounts",
     "audit",
     "patients",
@@ -52,6 +59,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "audit.middleware.AuditMiddleware",                               # one audit row per API / admin request
     "nazria_api.language.ContentLanguageMiddleware",                  # Content-Language: ur | en | ar
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -152,6 +160,7 @@ SPECTACULAR_SETTINGS = {
         "LanguageEnum": ["ur", "en", "ar"],
         "DirectionEnum": ["rtl", "ltr"],
         "SystemCodeEnum": ["nervous", "muscular", "glandular"],
+        "SocialProviderEnum": ["google", "facebook", "apple", "microsoft"],
     },
     "POSTPROCESSING_HOOKS": ["drf_spectacular.hooks.postprocess_schema_enums",
                              "consultations.schema.add_app_key_header"],
@@ -162,9 +171,41 @@ NAZRIA_API_DOCS = env_flag("NAZRIA_API_DOCS", DEBUG)
 NAZRIA_ADMIN = env_flag("NAZRIA_ADMIN", True)
 
 # ---------------------------------------------------------------- patients and pulse videos
-# Google sign-in: the OAuth client ID(s) the app's ID tokens are issued for (the "Web application" client ID the
-# Android app passes as serverClientId), comma-separated. Empty = Google sign-in off. Not a secret.
-NAZRIA_GOOGLE_CLIENT_IDS = [c.strip() for c in (env("NAZRIA_GOOGLE_CLIENT_IDS") or "").split(",") if c.strip()]
+# Social sign-in (django-allauth). Every provider is off until its IDs are set; GET /health/ lists the ones that are on.
+# Client / app IDs are public; NAZRIA_FACEBOOK_APP_SECRET is a secret: only in the server's env file, never in git.
+def _ids(name: str) -> list[str]:
+    return [c.strip() for c in (env(name) or "").split(",") if c.strip()]
+
+
+# Google: the "Web application" OAuth client ID(s) the Android app passes as serverClientId (comma-separated)
+NAZRIA_GOOGLE_CLIENT_IDS = _ids("NAZRIA_GOOGLE_CLIENT_IDS")
+# The server's public https:// address (Sign in with Apple sends the patient back to it; Apple needs HTTPS)
+NAZRIA_PUBLIC_URL = (env("NAZRIA_PUBLIC_URL") or "").rstrip("/")
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {"APPS": [{"client_id": c, "secret": "", "key": ""} for c in NAZRIA_GOOGLE_CLIENT_IDS],
+               "VERIFIED_EMAIL": False},                         # trust Google's own email_verified claim
+    "facebook": {"APPS": [{"client_id": c, "secret": env("NAZRIA_FACEBOOK_APP_SECRET") or "", "key": ""}
+                          for c in _ids("NAZRIA_FACEBOOK_APP_ID")[:1]],
+                 "FIELDS": ["id", "email", "name", "first_name", "last_name"], "SCOPE": ["email", "public_profile"],
+                 "VERIFIED_EMAIL": False, "EXCHANGE_TOKEN": False},
+    # Apple: the Services ID first (web sign-in from Android), then iOS bundle IDs if any; no private key needed:
+    # the server only checks the ID token
+    "apple": {"APPS": [{"client_id": ",".join(_ids("NAZRIA_APPLE_CLIENT_IDS")), "secret": "", "key": "",
+                        "settings": {"certificate_key": ""}}] if _ids("NAZRIA_APPLE_CLIENT_IDS") else []},
+    # Microsoft: the Application (client) ID of the "Mobile and desktop" app registration; tenant common |
+    # consumers | organizations | <tenant id>
+    "microsoft": {"APPS": [{"client_id": c, "secret": "", "key": ""} for c in _ids("NAZRIA_MICROSOFT_CLIENT_ID")[:1]],
+                  "TENANT": env("NAZRIA_MICROSOFT_TENANT") or "common",
+                  "provider_class": "accounts.social_providers.MicrosoftTokenProvider"},
+}
+SOCIALACCOUNT_ADAPTER = "accounts.social.NazriaSocialAccountAdapter"
+SOCIALACCOUNT_STORE_TOKENS = False                 # provider tokens are never stored
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = False         # never join accounts by e-mail address
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = False
+SOCIALACCOUNT_REQUESTS_TIMEOUT = 10
+ACCOUNT_LOGIN_METHODS = {"username"}               # allauth's web pages are not used; patients log in with the API
+ACCOUNT_SIGNUP_FIELDS = ["username*", "password1*"]
+ACCOUNT_EMAIL_VERIFICATION = "none"
 NAZRIA_DEFAULT_COUNTRY_CODE = env("NAZRIA_DEFAULT_COUNTRY_CODE") or "92"     # 03001234567 -> +923001234567
 MEDIA_ROOT = Path(env("NAZRIA_MEDIA_ROOT") or BASE_DIR / "media")          # pulse videos (never served publicly)
 NAZRIA_PULSE_MAX_MB = int(env("NAZRIA_PULSE_MAX_MB") or 100)
