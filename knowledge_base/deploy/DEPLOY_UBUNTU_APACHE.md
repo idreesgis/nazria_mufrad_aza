@@ -1,4 +1,4 @@
-# Deploying the Nazria API on Ubuntu 22.04 with Apache on port 95
+# Deploying the Nazria API on Ubuntu (20.04, 22.04, 24.04) with Apache on port 95
 
 ```
 Android app ──HTTP──▶ Apache :95 ──Unix socket──▶ gunicorn (systemd: nazria-api) ──▶ Django ──▶ PostgreSQL
@@ -42,8 +42,10 @@ sudo bash deploy_apache.sh
 
 **Software already on the server:**
 - git, Apache and Python are used as they are: the script installs only what is missing, and upgrades nothing.
-- Python must be 3.11 or newer. The newest installed version is used. Only when there is none (Ubuntu 22.04's own
-  Python is 3.10) does it add Python 3.12 next to the system Python.
+- **Python:** the project needs 3.11 or newer, and the newest installed version is used. When there is none (Ubuntu
+  20.04's Python is 3.8, 22.04's is 3.10), the script gives the project its own **private Python 3.12** in
+  `/opt/nazria-python`. It installs it with `uv`, at a pinned version whose download is checked against its published
+  SHA-256 checksum. The system Python is not changed, so other programs that use it keep working.
 - PostgreSQL is not installed or changed by the script. It only connects with the URL you give. If the database
   runs on this same server, the URL's host is `127.0.0.1` or `localhost`. The user in the URL must be allowed to
   connect in PostgreSQL's own settings (`pg_hba.conf`); the script never edits them.
@@ -75,7 +77,7 @@ The sections below are the same steps by hand, with the reasons for each.
 
 | You need | Why |
 |---|---|
-| Ubuntu 22.04 server, a user with `sudo`, SSH access | |
+| Ubuntu server (20.04, 22.04 or 24.04), a user with `sudo`, SSH access | Python 3.11+ is added for the project if missing (section 1) |
 | Port **95/TCP** open at your hosting provider (security group or cloud firewall) and on the server (section 9) | The app connects to it |
 | The PostgreSQL connection URL of the existing database | The API uses the same database as the knowledge base |
 | The server's IP on the database's allowlist or firewall | Otherwise the connection times out |
@@ -87,21 +89,35 @@ Check whether something already uses port 95:
 sudo ss -ltnp | grep ':95 ' || echo "port 95 is free"
 ```
 
-## 1. Packages, including Python 3.12
+## 1. Packages, including Python 3.11 or newer
 
-Ubuntu 22.04 comes with Python 3.10, but the project needs **Python 3.11 or newer**: the Gemini library
-(`google-genai`) does not install on 3.10. Install Python 3.12 from the deadsnakes PPA, which is used widely for
-this. It is installed next to the system Python and does not replace it.
+The project needs **Python 3.11 or newer**: Django 5.2 needs 3.10, and the Gemini library (`google-genai`) needs 3.11.
+Ubuntu 20.04 comes with Python 3.8 and 22.04 with 3.10, so add Python 3.12 **next to** the system Python. Never
+replace the system Python: Ubuntu's own tools depend on it.
 
 ```bash
-sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y ppa:deadsnakes/ppa
-sudo apt update
-sudo apt install -y python3.12 python3.12-venv python3.12-dev git curl apache2
-python3.12 --version            # Python 3.12.x
-apache2 -v                      # Server version: Apache/2.4.x (Ubuntu)
+sudo apt install -y git curl apache2          # skip what is already installed
+python3 --version                             # 3.11 or newer? then use it and skip the rest of this section
 ```
+
+**A private Python 3.12 for the project (any Ubuntu version).** This is what `deploy_apache.sh` does:
+
+```bash
+sudo install -d /opt/nazria-python/bin
+curl -fsSL -o /tmp/uv.tar.gz https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz
+echo "aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967  /tmp/uv.tar.gz" | sha256sum -c -
+tar -xzf /tmp/uv.tar.gz -C /tmp && sudo install -m 755 /tmp/uv-x86_64-unknown-linux-gnu/uv /opt/nazria-python/bin/uv
+sudo UV_PYTHON_INSTALL_DIR=/opt/nazria-python/python /opt/nazria-python/bin/uv python install 3.12
+sudo chmod -R a+rX /opt/nazria-python/python
+sudo UV_PYTHON_INSTALL_DIR=/opt/nazria-python/python /opt/nazria-python/bin/uv python find --managed-python 3.12
+# -> /opt/nazria-python/python/cpython-3.12-…/bin/python3.12 : use this path where the steps below say python3.12
+```
+
+On an ARM server, replace `x86_64` with `aarch64` and use the checksum
+`4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31`.
+
+**Or, on Ubuntu 22.04 only,** use the deadsnakes PPA instead:
+`sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt install -y python3.12 python3.12-venv`.
 
 ## 2. Service user and folders
 
